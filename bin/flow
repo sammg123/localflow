@@ -1,0 +1,43 @@
+#!/bin/zsh
+# flow: start LocalFlow from any terminal. `flow` starts it if it isn't running.
+#   flow            start (no-op if already running)
+#   flow stop       quit it (it still starts again at next login)
+#   flow restart    quit and start
+#   flow log        follow the dictation log
+LABEL=com.sam.localflow
+DOMAIN="gui/$(id -u)"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+APP="$HOME/Applications/LocalFlow.app"
+LOG="$HOME/Library/Logs/LocalFlow.log"
+
+running() { pgrep -x LocalFlow >/dev/null; }
+
+start() {
+  if running; then echo "LocalFlow is already running."; return 0; fi
+  if [ -f "$PLIST" ]; then
+    launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1 || launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null
+    launchctl kickstart "$DOMAIN/$LABEL" 2>/dev/null
+  fi
+  for _ in 1 2 3 4 5 6 7 8 9 10; do running && break; sleep 0.5; done
+  # The launch agent can sit loaded without starting; opening the app is the fallback.
+  running || open "$APP"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do running && break; sleep 0.5; done
+  if running; then echo "LocalFlow is running. Hold Fn to talk, double-tap Fn for the live window."
+  else echo "LocalFlow did not start. Try: open \"$APP\""; return 1; fi
+}
+
+stop() {
+  launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null
+  pkill -x LocalFlow 2>/dev/null
+  for _ in 1 2 3 4 5 6; do running || break; sleep 0.5; done
+  running && { echo "LocalFlow is still running."; return 1; }
+  echo "LocalFlow stopped."
+}
+
+case "${1:-start}" in
+  start)   start ;;
+  stop)    stop ;;
+  restart) stop >/dev/null; start ;;
+  log)     touch "$LOG"; tail -n 30 -f "$LOG" ;;
+  *)       echo "usage: flow [start|stop|restart|log]"; exit 2 ;;
+esac

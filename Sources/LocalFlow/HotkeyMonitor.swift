@@ -39,7 +39,7 @@ final class HotkeyMonitor {
     private var lastTapEndedAt: TimeInterval = 0
     private var swallowRelease = false
 
-    static let tapThreshold: TimeInterval = 0.35
+    nonisolated static let tapThreshold: TimeInterval = 0.35
     static let doubleTapWindow: TimeInterval = 0.45
 
     private var choice: HotkeyChoice

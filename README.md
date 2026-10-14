@@ -11,20 +11,20 @@ hold hotkey ──► mic (16 kHz mono) ──► Parakeet TDT 0.6B v3 on the Ne
                                         (or Apple SpeechAnalyzer)
 release ──► rule cleanup (fillers, replacements, spoken commands)
        ──► Apple Intelligence on-device LLM polish (optional)
-       ──► clipboard + simulated Cmd+V into the focused app (clipboard restored)
+       ──► clipboard + simulated Cmd+V into the focused app (transcript stays on the clipboard)
 ```
 
 - **ASR: NVIDIA Parakeet TDT 0.6B v3** via [FluidAudio](https://github.com/FluidInference/FluidAudio) (CoreML, runs on the Apple Neural Engine). Better English accuracy than Whisper large-v3-turbo, ~0.2-0.5s per utterance, ~500 MB one-time download, doesn't hallucinate on silence.
 - **Alternative engine: Apple SpeechAnalyzer** (macOS 26). No download, model managed by the OS, runs out-of-process.
 - **AI cleanup: Apple FoundationModels** (the Apple Intelligence on-device ~3B model). Removes fillers, applies self-corrections ("scratch that", "actually make that Wednesday"), formats lists, matches tone to the target app. Skipped for short utterances; falls back to rule-based cleanup if Apple Intelligence is off. Guarded: if the model answers your dictation instead of cleaning it, the raw transcript is used.
-- **Insertion:** save clipboard → write transcript (marked concealed so clipboard managers ignore it) → synthetic ⌘V → restore clipboard. Same mechanism Wispr Flow and VoiceInk use. If a password field (secure input) is active, the text stays on the clipboard and you're told.
+- **Insertion:** write transcript to the clipboard (marked concealed so clipboard managers don't archive it) → synthetic ⌘V. The transcript is left on the clipboard, so if a paste misses, ⌘V anywhere delivers it. If a password field (secure input) is active, nothing is pasted and you're told.
 
 ## Controls
 
 | Gesture | Action |
 |---|---|
 | Hold hotkey (default: **Fn/🌐**) | Push-to-talk; release to transcribe |
-| Double-tap hotkey | Hands-free mode; tap again to finish |
+| Double-tap hotkey | Hands-free with the live window (words appear as you talk); tap again to paste |
 | **Ctrl + hotkey** (hold) | Command mode: select text first, then speak an edit ("make this shorter", "turn into bullets") — the selection is replaced |
 | Esc while recording | Cancel |
 | Menu bar → Paste Last Transcript | Recovery if a paste didn't land |
@@ -38,11 +38,19 @@ Notes:
 - Spoken "new line" / "new paragraph" commands are off by default (Settings → General) because they can misfire on dictation that legitimately contains those phrases. When on, they only trigger as standalone clauses.
 - Hands-free recordings auto-stop at 5 minutes.
 
+## Diagnostics
+
+- `flow` in any terminal starts LocalFlow if it isn't running (`flow stop`, `flow restart`, `flow log`).
+- `~/Library/Logs/LocalFlow.log` records each dictation's timing, mic device, peak level and paste result (never the words).
+- The recorder rebuilds its audio engine on wake and input-device changes, and restarts capture once if audio stops arriving mid-recording.
+
 ## Build & install
 
 ```bash
 cd ~/localflow
-./build.sh          # builds release, assembles ~/Applications/LocalFlow.app, ad-hoc signs
+swift test          # unit tests (clipboard, live loop, audio stats, log, render)
+./build.sh          # builds release, assembles ~/Applications/LocalFlow.app, signs
+ln -sf ~/localflow/bin/flow ~/.local/bin/flow
 open ~/Applications/LocalFlow.app
 ```
 

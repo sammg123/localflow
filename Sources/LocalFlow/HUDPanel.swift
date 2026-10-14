@@ -134,7 +134,7 @@ private struct HUDView: View {
     }
 }
 
-private struct WaveformView: View {
+struct WaveformView: View {
     var level: Float
     private let barCount = 7
 

@@ -86,6 +86,10 @@ final class Settings: ObservableObject {
     @Published var spokenCommands: Bool {
         didSet { defaults.set(spokenCommands, forKey: "spokenCommands") }
     }
+    /// Double-tap opens the big live-transcript window instead of the small pill.
+    @Published var liveWindowOnDoubleTap: Bool {
+        didSet { defaults.set(liveWindowOnDoubleTap, forKey: "liveWindowOnDoubleTap") }
+    }
     /// Persist dictation history to disk (off by default: privacy-first).
     @Published var saveHistoryToDisk: Bool {
         didSet { defaults.set(saveHistoryToDisk, forKey: "saveHistoryToDisk") }
@@ -103,5 +107,6 @@ final class Settings: ObservableObject {
         toneMatching = defaults.object(forKey: "toneMatching") as? Bool ?? true
         spokenCommands = defaults.object(forKey: "spokenCommands") as? Bool ?? false
         saveHistoryToDisk = defaults.object(forKey: "saveHistoryToDisk") as? Bool ?? false
+        liveWindowOnDoubleTap = defaults.object(forKey: "liveWindowOnDoubleTap") as? Bool ?? true
     }
 }

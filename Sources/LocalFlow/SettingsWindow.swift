@@ -73,9 +73,10 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Text("Hold to talk. Double-tap for hands-free. Esc cancels.")
+            Text("Hold to talk. Double-tap for hands-free, tap again to paste. Esc cancels. Every transcript is also left on the clipboard.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Toggle("Double-tap opens the live transcript window", isOn: $settings.liveWindowOnDoubleTap)
 
             Divider()
 

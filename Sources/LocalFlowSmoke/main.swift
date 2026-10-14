@@ -13,7 +13,7 @@ func stamp(_ label: String, since: Date) {
 
 let args = CommandLine.arguments
 guard args.count >= 2 else {
-    print("usage: localflow-smoke <audio-file> [--polish]")
+    print("usage: localflow-smoke <audio-file> [--polish] [--live]")
     exit(1)
 }
 let audioPath = args[1]
@@ -40,6 +40,18 @@ do {
     stamp("transcribed in \(String(format: "%.2f", Date().timeIntervalSince(tTranscribe)))s (confidence \(result.confidence))", since: t0)
     text = result.text
     print("TRANSCRIPT: \(text)")
+    if args.contains("--live") {
+        // Live-window cost: one pass per prefix length, each capped at the 25 s the
+        // live transcriber ever sends in a single pass.
+        for seconds in [2.0, 5.0, 10.0, 25.0] {
+            let count = min(samples.count, Int(seconds * 16_000))
+            var state = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
+            let tPass = Date()
+            let pass = try await manager.transcribe(Array(samples[0..<count]), decoderState: &state)
+            stamp(String(format: "live pass over %.0fs of audio: %.3fs, %d chars", Double(count) / 16_000,
+                         Date().timeIntervalSince(tPass), pass.text.count), since: t0)
+        }
+    }
 } catch {
     print("FAIL transcription: \(error)")
     exit(3)

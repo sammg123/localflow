@@ -44,6 +44,9 @@ final class AppController {
     private var hotkeyMonitor: HotkeyMonitor!
     private var menuBar: MenuBarController!
     private var hud: HUDPanel!
+    private var livePanel: LivePanel!
+    /// Runs only while the hands-free live window is up.
+    private var liveTranscriber: LiveTranscriber?
     private var settingsWindow: SettingsWindowController!
     private var llmPolisher: LLMPolisher!
     private var recorderPrepared = false
@@ -83,6 +86,7 @@ final class AppController {
 
     func start() {
         hud = HUDPanel()
+        livePanel = LivePanel()
         menuBar = MenuBarController(controller: self)
         settingsWindow = SettingsWindowController(controller: self)
         llmPolisher = TranscriberFactory.makeLLMPolisher()
@@ -90,6 +94,7 @@ final class AppController {
         recorder.levelHandler = { [weak self] level in
             DispatchQueue.main.async {
                 self?.hud.updateLevel(level)
+                self?.livePanel.updateLevel(level)
             }
         }
         recorder.limitHandler = { [weak self] in
@@ -101,9 +106,10 @@ final class AppController {
         }
         recorder.captureLostHandler = { [weak self] in
             guard let self, case .recording = self.state else { return }
+            FlowLog.shared.write("capture lost mid-recording, input: \(AudioRecorder.currentInputName)")
             SoundPlayer.playError()
             self.abortRecording(silent: false)
-            self.hud.flash("Microphone changed — recording stopped", seconds: 3)
+            self.hud.flash("Lost the microphone, recording stopped. Try again", seconds: 3)
         }
 
         hotkeyMonitor = HotkeyMonitor(choice: settings.hotkey)
@@ -139,6 +145,7 @@ final class AppController {
     }
 
     func shutdown() {
+        stopLiveWindow()
         hotkeyMonitor?.stopMonitoring()
         if case .recording = state {
             recorder.cancel()
@@ -213,7 +220,7 @@ final class AppController {
         case .recording(.dictation(handsFree: false)):
             // Second tap-down already restarted recording; just flip it to hands-free.
             state = .recording(.dictation(handsFree: true))
-            hud.showRecording(caption: "Listening (hands-free)")
+            presentHandsFree()
         case .idle:
             beginRecording(mode: .dictation(handsFree: true))
         default:
@@ -259,16 +266,22 @@ final class AppController {
         do {
             try recorder.start()
         } catch {
+            FlowLog.shared.write("mic start failed: \(error.localizedDescription), input: \(AudioRecorder.currentInputName)")
             SoundPlayer.playError()
             hud.flash("Couldn't start the microphone: \(error.localizedDescription)")
             return
         }
+        FlowLog.shared.write("recording started (\(mode)), input: \(AudioRecorder.currentInputName)")
         state = .recording(mode)
         hotkeyMonitor.escapeEnabled = true
         menuBar.setIcon(recording: true)
         switch mode {
         case .dictation(let handsFree):
-            hud.showRecording(caption: handsFree ? "Listening (hands-free)" : "Listening")
+            if handsFree {
+                presentHandsFree()
+            } else {
+                hud.showRecording(caption: "Listening")
+            }
             if settings.polishMode == .appleIntelligence {
                 llmPolisher.prewarm()
             }
@@ -277,6 +290,32 @@ final class AppController {
             llmPolisher.prewarm() // command mode always needs the model
         }
         SoundPlayer.playStart()
+    }
+
+    /// Hands-free UI: the big live window (words appear as you talk), or the pill if
+    /// the live window is switched off in Settings.
+    private func presentHandsFree() {
+        guard settings.liveWindowOnDoubleTap else {
+            hud.showRecording(caption: "Listening (hands-free)")
+            return
+        }
+        hud.hide()
+        livePanel.show()
+        let engine = transcriber
+        let live = LiveTranscriber(
+            sampleCount: { [recorder] in recorder.capturedSampleCount },
+            samples: { [recorder] range in recorder.samples(in: range) },
+            transcribe: { samples in try await engine.transcribe(samples: samples) },
+            onText: { [weak self] text in self?.livePanel.update(text: text) }
+        )
+        liveTranscriber = live
+        live.start()
+    }
+
+    private func stopLiveWindow() {
+        liveTranscriber?.stop()
+        liveTranscriber = nil
+        livePanel?.hide()
     }
 
     /// Awaits an abandonable task with a hard deadline. On timeout the task keeps
@@ -301,6 +340,7 @@ final class AppController {
     }
 
     private func abortRecording(silent: Bool) {
+        stopLiveWindow()
         recorder.cancel()
         state = .idle
         hotkeyMonitor.escapeEnabled = false
@@ -314,14 +354,25 @@ final class AppController {
 
     private func finishRecording() {
         guard case .recording(let mode) = state else { return }
+        stopLiveWindow()
         let samples = recorder.stop()
         hotkeyMonitor.escapeEnabled = false
         menuBar.setIcon(recording: false)
 
         let duration = Double(samples.count) / AudioRecorder.targetSampleRate
+        FlowLog.shared.write(String(format: "recording stopped: %.1fs, peak %.4f", duration, AudioStats.peak(samples)))
         guard duration >= 0.3 else {
             state = .idle
-            hud.hide()
+            if recorder.lastStopWasStalled {
+                // Long enough to count, but not one buffer of audio arrived: the input
+                // is wedged. Say so (this used to vanish silently) and start the next
+                // dictation on a fresh engine.
+                recorder.rebuild(reason: "recording came back empty")
+                SoundPlayer.playError()
+                hud.flash("The mic didn't record anything. Try again", seconds: 3)
+            } else {
+                hud.hide()
+            }
             return
         }
 
@@ -426,13 +477,16 @@ final class AppController {
         }
 
         let raw: String
+        let started = ContinuousClock.now
         do {
             raw = try await engine.transcribe(samples: samples)
         } catch {
+            FlowLog.shared.write("transcription failed: \(error.localizedDescription)")
             SoundPlayer.playError()
             if hudActive() { hud.flash("Transcription failed: \(error.localizedDescription)", seconds: 3) }
             return
         }
+        FlowLog.shared.write("transcribed \(raw.count) chars in \(started.duration(to: .now))")
 
         let preCleaned = rules.apply(
             raw,
@@ -442,7 +496,14 @@ final class AppController {
             toneMatching: false
         )
         guard !preCleaned.isEmpty else {
-            if hudActive() { hud.flash("Didn't catch anything") }
+            if AudioStats.isSilent(samples) {
+                let input = AudioRecorder.currentInputName
+                FlowLog.shared.write("empty transcript from silent audio, input: \(input)")
+                SoundPlayer.playError()
+                if hudActive() { hud.flash("Your mic heard silence. Input is \(input)", seconds: 3.5) }
+            } else if hudActive() {
+                hud.flash("Didn't catch anything")
+            }
             return
         }
 
@@ -478,6 +539,7 @@ final class AppController {
 
         let result = await inserter.insert(text)
         history.add(text: text, appName: appName)
+        FlowLog.shared.write("insert into \(appName): \(result)")
 
         switch result {
         case .pasted:

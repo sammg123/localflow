@@ -21,6 +21,14 @@ let package = Package(
                 .swiftLanguageMode(.v5),
             ]
         ),
+        .testTarget(
+            name: "LocalFlowTests",
+            dependencies: ["LocalFlow"],
+            path: "Tests/LocalFlowTests",
+            swiftSettings: [
+                .swiftLanguageMode(.v5),
+            ]
+        ),
         // Headless pipeline test: audio file -> Parakeet -> FoundationModels. No TCC needed.
         .executableTarget(
             name: "localflow-smoke",

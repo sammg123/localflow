@@ -1,14 +1,17 @@
 import AppKit
 import Carbon.HIToolbox
 
-enum InsertionResult {
+enum InsertionResult: Equatable {
     case pasted
     case leftOnClipboard(reason: String)
 }
 
-/// Inserts text into the focused app the way Wispr Flow and VoiceInk do:
-/// save clipboard -> write transcript (marked concealed so clipboard managers ignore it)
-/// -> synthesize Cmd+V -> restore the previous clipboard.
+/// Inserts text into the focused app: write the transcript to the clipboard, then
+/// synthesize Cmd+V. The transcript is deliberately LEFT on the clipboard afterwards
+/// (marked concealed, so clipboard-history managers don't archive every dictation),
+/// so when a paste misses (wrong field, an app that ignores synthetic keys, focus that
+/// moved) a plain ⌘V anywhere still delivers it. Restoring the old clipboard used to
+/// race slow apps (Electron reads late) and could paste the user's previous clipboard.
 @MainActor
 final class TextInserter {
     static let concealedType = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
@@ -16,47 +19,43 @@ final class TextInserter {
     /// Kept so "Paste Last Transcript" always works even when auto-paste fails.
     private(set) var lastTranscript: String?
 
-    func insert(_ text: String) async -> InsertionResult {
-        lastTranscript = text
+    private let pasteboard: NSPasteboard
+    private let isTrusted: () -> Bool
+    private let isSecureInput: () -> Bool
+    private let postPaste: () -> Void
 
-        guard AXIsProcessTrusted() else {
-            copyToClipboard(text)
+    init(pasteboard: NSPasteboard = .general,
+         isTrusted: @escaping () -> Bool = { AXIsProcessTrusted() },
+         isSecureInput: @escaping () -> Bool = { IsSecureEventInputEnabled() },
+         postPaste: (() -> Void)? = nil) {
+        self.pasteboard = pasteboard
+        self.isTrusted = isTrusted
+        self.isSecureInput = isSecureInput
+        self.postPaste = postPaste ?? { TextInserter.postCommandShortcut(CGKeyCode(kVK_ANSI_V)) }
+    }
+
+    func insert(_ text: String) async -> InsertionResult {
+        copyToClipboard(text)
+
+        guard isTrusted() else {
             return .leftOnClipboard(reason: "Accessibility permission is missing")
         }
-        if IsSecureEventInputEnabled() {
+        if isSecureInput() {
             // A password field (or terminal secure-entry) is active: synthetic paste is blocked.
-            copyToClipboard(text)
             return .leftOnClipboard(reason: "Secure input is active — press ⌘V to paste manually")
         }
 
-        let pasteboard = NSPasteboard.general
-        let saved = snapshot(of: pasteboard)
-
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
-        pasteboard.setString("", forType: Self.concealedType)
-        let ourChangeCount = pasteboard.changeCount
-
         // Small delay so the pasteboard write settles before the target app reads it.
         try? await Task.sleep(for: .milliseconds(80))
-        postCmdV()
-
-        // Give the target app time to consume the pasteboard, then restore — slow apps
-        // (Electron, remote desktops) read it late, and restoring early would paste the
-        // user's OLD clipboard instead of the transcript. Restore only if nobody else
-        // wrote in the meantime, and never from an incomplete snapshot.
-        try? await Task.sleep(for: .milliseconds(600))
-        if saved.complete, pasteboard.changeCount == ourChangeCount {
-            restore(saved.items, to: pasteboard)
-        }
+        postPaste()
         return .pasted
     }
 
     func copyToClipboard(_ text: String) {
         lastTranscript = text
-        let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
+        pasteboard.setString("", forType: Self.concealedType)
     }
 
     /// Re-paste the last transcript (menu action / recovery path).
@@ -71,14 +70,13 @@ final class TextInserter {
     /// user's clipboard afterwards. Returns nil when nothing is selected (no app writes
     /// the pasteboard for an empty copy) or capture isn't possible.
     func captureSelection() async -> String? {
-        guard AXIsProcessTrusted(), !IsSecureEventInputEnabled() else { return nil }
+        guard isTrusted(), !isSecureInput() else { return nil }
 
-        let pasteboard = NSPasteboard.general
         let saved = snapshot(of: pasteboard)
         pasteboard.clearContents()
         let baseline = pasteboard.changeCount
 
-        postCommandShortcut(CGKeyCode(kVK_ANSI_C))
+        Self.postCommandShortcut(CGKeyCode(kVK_ANSI_C))
 
         // Poll briefly: slow apps (Electron) take a beat to service the copy.
         var selection: String?
@@ -98,11 +96,7 @@ final class TextInserter {
 
     // MARK: - Shortcut synthesis
 
-    private func postCmdV() {
-        postCommandShortcut(CGKeyCode(kVK_ANSI_V))
-    }
-
-    private func postCommandShortcut(_ virtualKey: CGKeyCode) {
+    private static func postCommandShortcut(_ virtualKey: CGKeyCode) {
         guard let source = CGEventSource(stateID: .privateState) else { return }
 
         // Match VoiceInk's timing: discrete events, ~10ms apart, posted to the HID tap.

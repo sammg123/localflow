@@ -1,6 +1,19 @@
 import AppKit
 import Carbon.HIToolbox
 
+/// What releasing a Control + hotkey press means. A quick tap pastes the last
+/// transcript again; a hold is command mode (edit the selection by voice).
+enum ControlHotkeyAction: Equatable {
+    case pasteLastTranscript
+    case finishCommand
+    case commandUnavailable
+
+    static func forRelease(held: TimeInterval, commandAvailable: Bool) -> ControlHotkeyAction {
+        if held < HotkeyMonitor.tapThreshold { return .pasteLastTranscript }
+        return commandAvailable ? .finishCommand : .commandUnavailable
+    }
+}
+
 /// Watches for the push-to-talk modifier via global/local NSEvent monitors.
 /// Global monitors for key events require Accessibility trust (which we need anyway to paste),
 /// so this adds no extra permission beyond what pasting requires.

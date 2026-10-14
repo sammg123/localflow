@@ -46,7 +46,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         handsFree.target = self
         menu.addItem(handsFree)
 
-        let pasteLast = NSMenuItem(title: "Paste Last Transcript", action: #selector(pasteLast), keyEquivalent: "")
+        let shortcut = Settings.shared.hotkey.shortName.map { " (Control + \($0))" } ?? ""
+        let pasteLast = NSMenuItem(title: "Paste Last Transcript\(shortcut)", action: #selector(pasteLast), keyEquivalent: "")
         pasteLast.target = self
         pasteLast.isEnabled = controller.inserter.lastTranscript != nil
         menu.addItem(pasteLast)
@@ -103,7 +104,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func toggleHandsFree() { controller?.toggleHandsFree() }
 
     @objc private func pasteLast() {
-        Task { await controller?.inserter.pasteLastTranscript() }
+        controller?.pasteLastTranscript()
     }
 
     @objc private func copyHistoryEntry(_ sender: NSMenuItem) {

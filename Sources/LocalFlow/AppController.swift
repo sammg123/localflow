@@ -58,6 +58,9 @@ final class AppController {
     private var processChain: Task<Void, Never> = Task {}
     /// Set by the 5-minute recording limit; consumed by the next finishRecording.
     private var pendingLimitNotice = false
+    /// A Control + hotkey press that started no recording (command mode unavailable).
+    /// Its release decides: a tap pastes the last transcript, a hold explains why not.
+    private var controlPressWithoutRecording = false
 
     /// Always derived from settings — an engine switch can never desync this.
     /// (The factory caches instances, so this is cheap; in-flight dictations
@@ -185,8 +188,14 @@ final class AppController {
     // MARK: - Hotkey handling
 
     private func hotkeyPressed(command: Bool) {
+        controlPressWithoutRecording = false
         switch state {
         case .idle, .processing:
+            if command, !llmPolisher.isAvailable {
+                // Might be a quick Control tap (paste last transcript): decide on release.
+                controlPressWithoutRecording = true
+                return
+            }
             // Pressing while the PREVIOUS utterance is still processing starts the next
             // recording immediately — back-to-back dictation must not lose speech.
             beginRecording(mode: command ? .command : .dictation(handsFree: false))
@@ -202,7 +211,7 @@ final class AppController {
 
     private func hotkeyReleased(held: TimeInterval) {
         switch state {
-        case .recording(.dictation(handsFree: false)), .recording(.command):
+        case .recording(.dictation(handsFree: false)):
             if held >= HotkeyMonitor.tapThreshold {
                 finishRecording()
             } else {
@@ -210,17 +219,78 @@ final class AppController {
                 // upgrade to hands-free via onDoubleTap.)
                 abortRecording(silent: true)
             }
+        case .recording(.command):
+            if ControlHotkeyAction.forRelease(held: held, commandAvailable: true) == .finishCommand {
+                finishRecording()
+            } else {
+                abortRecording(silent: true)
+                pasteLastTranscript()
+            }
         default:
-            break
+            guard controlPressWithoutRecording else { break }
+            controlPressWithoutRecording = false
+            switch ControlHotkeyAction.forRelease(held: held, commandAvailable: false) {
+            case .pasteLastTranscript:
+                pasteLastTranscript()
+            case .commandUnavailable:
+                SoundPlayer.playError()
+                hud.flash("Command mode needs Apple Intelligence — \(llmPolisher.unavailableReason ?? "unavailable")", seconds: 4)
+            case .finishCommand:
+                break
+            }
+        }
+    }
+
+    /// Control + hotkey tap (or the menu): paste the last dictation again, without
+    /// touching what the user has on the clipboard.
+    func pasteLastTranscript() {
+        // After a restart the in-memory transcript is gone; saved history may still have it.
+        let fallback = inserter.lastTranscript == nil ? history.entries.first?.text : nil
+        Task {
+            // Control is usually still held when the hotkey comes up; a Cmd+V posted
+            // under it reaches the app as Control-Cmd-V.
+            await waitForModifiersReleased()
+            let result: InsertionResult?
+            if let fallback {
+                result = await inserter.insert(fallback)
+            } else {
+                result = await inserter.pasteLastTranscript()
+            }
+            guard let result else {
+                hud.flash("Nothing to paste yet")
+                return
+            }
+            FlowLog.shared.write("paste last transcript: \(result)")
+            if case .leftOnClipboard(let reason) = result {
+                SoundPlayer.playError()
+                hud.flash("Copied to clipboard — \(reason)", seconds: 3.5)
+            }
+        }
+    }
+
+    private func waitForModifiersReleased(timeout: Duration = .milliseconds(1500)) async {
+        let held: NSEvent.ModifierFlags = [.control, .option, .shift, .command, .function]
+        let deadline = ContinuousClock.now + timeout
+        while !NSEvent.modifierFlags.intersection(held).isEmpty, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(20))
         }
     }
 
     private func hotkeyDoubleTapped() {
+        if controlPressWithoutRecording {
+            controlPressWithoutRecording = false
+            pasteLastTranscript()
+            return
+        }
         switch state {
         case .recording(.dictation(handsFree: false)):
             // Second tap-down already restarted recording; just flip it to hands-free.
             state = .recording(.dictation(handsFree: true))
             presentHandsFree()
+        case .recording(.command):
+            // Two quick Control taps: each one is a paste, never a stuck command recording.
+            abortRecording(silent: true)
+            pasteLastTranscript()
         case .idle:
             beginRecording(mode: .dictation(handsFree: true))
         default:
@@ -285,11 +355,19 @@ final class AppController {
             if settings.polishMode == .appleIntelligence {
                 llmPolisher.prewarm()
             }
+            SoundPlayer.playStart()
         case .command:
-            hud.showRecording(caption: "Command — speak an edit")
             llmPolisher.prewarm() // command mode always needs the model
+            // Recording starts now so no speech is lost, but the pill and chime wait
+            // until this is clearly a hold: a quick Control tap means "paste last
+            // transcript" and shouldn't flash command mode first.
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(HotkeyMonitor.tapThreshold))
+                guard let self, case .recording(.command) = self.state else { return }
+                self.hud.showRecording(caption: "Command — speak an edit")
+                SoundPlayer.playStart()
+            }
         }
-        SoundPlayer.playStart()
     }
 
     /// Hands-free UI: the big live window (words appear as you talk), or the pill if

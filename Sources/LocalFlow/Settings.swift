@@ -17,6 +17,16 @@ enum HotkeyChoice: String, CaseIterable, Identifiable {
         case .controlOption: return "Control + Option (⌃⌥)"
         }
     }
+
+    /// For "Control + <key>" hints. Nil when the hotkey already includes Control.
+    var shortName: String? {
+        switch self {
+        case .rightOption: return "Right ⌥"
+        case .fnKey: return "Fn"
+        case .rightCommand: return "Right ⌘"
+        case .controlOption: return nil
+        }
+    }
 }
 
 enum PolishMode: String, CaseIterable, Identifiable {

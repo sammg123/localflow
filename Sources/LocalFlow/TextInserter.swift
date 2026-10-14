@@ -6,12 +6,11 @@ enum InsertionResult: Equatable {
     case leftOnClipboard(reason: String)
 }
 
-/// Inserts text into the focused app: write the transcript to the clipboard, then
-/// synthesize Cmd+V. The transcript is deliberately LEFT on the clipboard afterwards
-/// (marked concealed, so clipboard-history managers don't archive every dictation),
-/// so when a paste misses (wrong field, an app that ignores synthetic keys, focus that
-/// moved) a plain ⌘V anywhere still delivers it. Restoring the old clipboard used to
-/// race slow apps (Electron reads late) and could paste the user's previous clipboard.
+/// Inserts text into the focused app the way Wispr Flow and VoiceInk do: save the
+/// clipboard, write the transcript (marked concealed so clipboard managers ignore it),
+/// synthesize Cmd+V, then put the user's clipboard back. A missed paste is recovered
+/// with Control + hotkey (paste last transcript), never by leaving the transcript on
+/// the clipboard over whatever the user had copied.
 @MainActor
 final class TextInserter {
     static let concealedType = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
@@ -23,31 +22,64 @@ final class TextInserter {
     private let isTrusted: () -> Bool
     private let isSecureInput: () -> Bool
     private let postPaste: () -> Void
+    /// How long the target app gets to read the transcript before the old clipboard
+    /// returns. Slow apps (Electron, remote desktops) read late; too short a wait
+    /// pastes the user's OLD clipboard instead of the transcript.
+    private let restoreDelay: Duration
+    /// Inserts run one at a time. Two overlapping ones would each snapshot the
+    /// clipboard, and the second would "restore" the first one's transcript.
+    private var insertQueue: Task<InsertionResult, Never>?
 
     init(pasteboard: NSPasteboard = .general,
          isTrusted: @escaping () -> Bool = { AXIsProcessTrusted() },
          isSecureInput: @escaping () -> Bool = { IsSecureEventInputEnabled() },
-         postPaste: (() -> Void)? = nil) {
+         postPaste: (() -> Void)? = nil,
+         restoreDelay: Duration = .milliseconds(800)) {
         self.pasteboard = pasteboard
         self.isTrusted = isTrusted
         self.isSecureInput = isSecureInput
         self.postPaste = postPaste ?? { TextInserter.postCommandShortcut(CGKeyCode(kVK_ANSI_V)) }
+        self.restoreDelay = restoreDelay
     }
 
     func insert(_ text: String) async -> InsertionResult {
-        copyToClipboard(text)
+        lastTranscript = text
+        let previous = insertQueue
+        let task = Task { @MainActor [weak self] () -> InsertionResult in
+            _ = await previous?.value
+            guard let self else { return .leftOnClipboard(reason: "LocalFlow is quitting") }
+            return await self.performInsert(text)
+        }
+        insertQueue = task
+        return await task.value
+    }
 
+    private func performInsert(_ text: String) async -> InsertionResult {
         guard isTrusted() else {
+            copyToClipboard(text)
             return .leftOnClipboard(reason: "Accessibility permission is missing")
         }
         if isSecureInput() {
-            // A password field (or terminal secure-entry) is active: synthetic paste is blocked.
+            // A password field (or terminal secure-entry) is active: synthetic paste is
+            // blocked, so the clipboard is the only way to deliver it.
+            copyToClipboard(text)
             return .leftOnClipboard(reason: "Secure input is active — press ⌘V to paste manually")
         }
+
+        let saved = snapshot(of: pasteboard)
+        copyToClipboard(text)
+        let ourChangeCount = pasteboard.changeCount
 
         // Small delay so the pasteboard write settles before the target app reads it.
         try? await Task.sleep(for: .milliseconds(80))
         postPaste()
+
+        // Restore only if nobody else wrote in the meantime, and never from an
+        // incomplete snapshot.
+        try? await Task.sleep(for: restoreDelay)
+        if saved.complete, pasteboard.changeCount == ourChangeCount {
+            restore(saved.items, to: pasteboard)
+        }
         return .pasted
     }
 
@@ -58,10 +90,12 @@ final class TextInserter {
         pasteboard.setString("", forType: Self.concealedType)
     }
 
-    /// Re-paste the last transcript (menu action / recovery path).
-    func pasteLastTranscript() async {
-        guard let text = lastTranscript else { return }
-        _ = await insert(text)
+    /// Re-paste the last transcript (Control + hotkey, or the menu). Nil when there is
+    /// nothing to paste yet.
+    @discardableResult
+    func pasteLastTranscript() async -> InsertionResult? {
+        guard let text = lastTranscript else { return nil }
+        return await insert(text)
     }
 
     // MARK: - Selection capture (command mode)

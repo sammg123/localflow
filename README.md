@@ -11,13 +11,13 @@ hold hotkey ──► mic (16 kHz mono) ──► Parakeet TDT 0.6B v3 on the Ne
                                         (or Apple SpeechAnalyzer)
 release ──► rule cleanup (fillers, replacements, spoken commands)
        ──► Apple Intelligence on-device LLM polish (optional)
-       ──► clipboard + simulated Cmd+V into the focused app (transcript stays on the clipboard)
+       ──► clipboard + simulated Cmd+V into the focused app (your clipboard is put back)
 ```
 
 - **ASR: NVIDIA Parakeet TDT 0.6B v3** via [FluidAudio](https://github.com/FluidInference/FluidAudio) (CoreML, runs on the Apple Neural Engine). Better English accuracy than Whisper large-v3-turbo, ~0.2-0.5s per utterance, ~500 MB one-time download, doesn't hallucinate on silence.
 - **Alternative engine: Apple SpeechAnalyzer** (macOS 26). No download, model managed by the OS, runs out-of-process.
 - **AI cleanup: Apple FoundationModels** (the Apple Intelligence on-device ~3B model). Removes fillers, applies self-corrections ("scratch that", "actually make that Wednesday"), formats lists, matches tone to the target app. Skipped for short utterances; falls back to rule-based cleanup if Apple Intelligence is off. Guarded: if the model answers your dictation instead of cleaning it, the raw transcript is used.
-- **Insertion:** write transcript to the clipboard (marked concealed so clipboard managers don't archive it) → synthetic ⌘V. The transcript is left on the clipboard, so if a paste misses, ⌘V anywhere delivers it. If a password field (secure input) is active, nothing is pasted and you're told.
+- **Insertion:** save clipboard → write transcript (marked concealed so clipboard managers ignore it) → synthetic ⌘V → restore your clipboard (pastes run one at a time so overlapping ones can't swap clipboards). If a paste misses, tap **Control + hotkey** to paste the last transcript again. If a password field (secure input) is active, the text is left on the clipboard and you're told.
 
 ## Controls
 
@@ -25,9 +25,10 @@ release ──► rule cleanup (fillers, replacements, spoken commands)
 |---|---|
 | Hold hotkey (default: **Fn/🌐**) | Push-to-talk; release to transcribe |
 | Double-tap hotkey | Hands-free with the live window (words appear as you talk); tap again to paste |
+| **Ctrl + hotkey** (tap) | Paste the last transcript again (your clipboard is untouched) |
 | **Ctrl + hotkey** (hold) | Command mode: select text first, then speak an edit ("make this shorter", "turn into bullets") — the selection is replaced |
 | Esc while recording | Cancel |
-| Menu bar → Paste Last Transcript | Recovery if a paste didn't land |
+| Menu bar → Paste Last Transcript | Same as Ctrl + hotkey tap |
 
 Command mode needs Apple Intelligence enabled (it's the edit engine) and isn't available when the main hotkey is ⌃⌥.
 

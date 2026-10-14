@@ -1,0 +1,248 @@
+import AppKit
+import SwiftUI
+
+enum SettingsTab: String {
+    case general, dictionary, setup
+}
+
+/// Shared between the controller and the SwiftUI view so show(tab:) can switch tabs
+/// even when the window already exists.
+@MainActor
+final class SettingsTabState: ObservableObject {
+    @Published var tab: SettingsTab = .general
+}
+
+@MainActor
+final class SettingsWindowController {
+    private var window: NSWindow?
+    private let tabState = SettingsTabState()
+    private weak var controller: AppController?
+
+    init(controller: AppController) {
+        self.controller = controller
+    }
+
+    func show(tab: SettingsTab = .general) {
+        tabState.tab = tab
+        if window == nil {
+            let view = SettingsView(tabState: tabState, controller: controller)
+            let hosting = NSHostingController(rootView: view)
+            let win = NSWindow(contentViewController: hosting)
+            win.title = "LocalFlow Settings"
+            win.styleMask = [.titled, .closable, .miniaturizable]
+            win.isReleasedWhenClosed = false
+            win.setContentSize(NSSize(width: 480, height: 420))
+            win.center()
+            window = win
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+    }
+}
+
+struct SettingsView: View {
+    @ObservedObject var tabState: SettingsTabState
+    weak var controller: AppController?
+    @ObservedObject private var settings = Settings.shared
+
+    var body: some View {
+        TabView(selection: $tabState.tab) {
+            generalTab
+                .tabItem { Label("General", systemImage: "gearshape") }
+                .tag(SettingsTab.general)
+            dictionaryTab
+                .tabItem { Label("Dictionary", systemImage: "character.book.closed") }
+                .tag(SettingsTab.dictionary)
+            setupTab
+                .tabItem { Label("Setup", systemImage: "checkmark.shield") }
+                .tag(SettingsTab.setup)
+        }
+        .padding(20)
+        .frame(width: 480)
+    }
+
+    private var generalTab: some View {
+        Form {
+            Picker("Push-to-talk key:", selection: $settings.hotkey) {
+                ForEach(HotkeyChoice.allCases) { choice in
+                    Text(choice.label).tag(choice)
+                }
+            }
+            if settings.hotkey == .fnKey {
+                Text("Set System Settings → Keyboard → “Press 🌐 key to” = “Do Nothing”, or macOS will trigger emoji/dictation on top of LocalFlow.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Text("Hold to talk. Double-tap for hands-free. Esc cancels.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Divider()
+
+            Picker("Speech engine:", selection: $settings.engine) {
+                ForEach(EngineChoice.allCases) { engine in
+                    Text(engine.label).tag(engine)
+                }
+            }
+            Text("Engine changes apply to the next dictation. Parakeet downloads ~500 MB once, then runs on the Neural Engine.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Divider()
+
+            Picker("AI cleanup:", selection: $settings.polishMode) {
+                ForEach(PolishMode.allCases) { mode in
+                    Text(mode.label).tag(mode)
+                }
+            }
+            Stepper(value: $settings.polishMinWords, in: 0...30) {
+                Text("Skip AI cleanup under \(settings.polishMinWords) words")
+            }
+            Toggle("Match tone to the target app", isOn: $settings.toneMatching)
+            Toggle("Spoken “new line” / “new paragraph” commands", isOn: $settings.spokenCommands)
+
+            Divider()
+
+            Toggle("Sounds", isOn: $settings.soundsEnabled)
+            Toggle("Save history to disk", isOn: $settings.saveHistoryToDisk)
+            Text("Off = history lives only in memory and vanishes on quit.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 8)
+        .onChange(of: settings.hotkey) { _, newValue in
+            controller?.hotkeyChanged(to: newValue)
+        }
+        .onChange(of: settings.engine) { _, _ in
+            controller?.engineChanged()
+        }
+        .onChange(of: settings.saveHistoryToDisk) { _, _ in
+            controller?.history.persistIfEnabled()
+        }
+    }
+
+    @State private var dictionaryText = Settings.shared.dictionaryWords.joined(separator: "\n")
+    @State private var replacementsText = Settings.shared.replacements
+        .map { "\($0.key) -> \($0.value)" }.sorted().joined(separator: "\n")
+
+    private var dictionaryTab: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Personal dictionary — one name/term per line. The AI pass will spell these exactly.")
+                .font(.caption)
+            TextEditor(text: $dictionaryText)
+                .font(.system(.body, design: .monospaced))
+                .frame(height: 110)
+                .onChange(of: dictionaryText) { _, newValue in
+                    Settings.shared.dictionaryWords = newValue
+                        .split(separator: "\n")
+                        .map { $0.trimmingCharacters(in: .whitespaces) }
+                        .filter { !$0.isEmpty }
+                }
+
+            Text("Replacements — “wrong -> right”, one per line, applied to every dictation.")
+                .font(.caption)
+            TextEditor(text: $replacementsText)
+                .font(.system(.body, design: .monospaced))
+                .frame(height: 110)
+                .onChange(of: replacementsText) { _, newValue in
+                    var map: [String: String] = [:]
+                    for line in newValue.split(separator: "\n") {
+                        let parts = line.components(separatedBy: "->")
+                        guard parts.count == 2 else { continue }
+                        let wrong = parts[0].trimmingCharacters(in: .whitespaces)
+                        let right = parts[1].trimmingCharacters(in: .whitespaces)
+                        if !wrong.isEmpty { map[wrong] = right }
+                    }
+                    Settings.shared.replacements = map
+                }
+        }
+        .padding(.vertical, 8)
+    }
+
+    private var setupTab: some View {
+        SetupView(controller: controller)
+    }
+}
+
+/// Live permission checklist. Polls only while the view is actually on screen.
+struct SetupView: View {
+    weak var controller: AppController?
+    @State private var micOK = Permissions.microphoneGranted
+    @State private var axOK = Permissions.accessibilityGranted
+    @State private var pollTimer: Timer?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("LocalFlow needs two permissions — the same two Wispr Flow uses. Nothing ever leaves this Mac.")
+                .font(.callout)
+
+            permissionRow(
+                granted: micOK,
+                title: "Microphone",
+                detail: "To hear you while the hotkey is held.",
+                action: {
+                    Task {
+                        _ = await Permissions.requestMicrophone()
+                        micOK = Permissions.microphoneGranted
+                        if !micOK { Permissions.openMicrophoneSettings() }
+                    }
+                }
+            )
+            permissionRow(
+                granted: axOK,
+                title: "Accessibility",
+                detail: "To detect the hotkey and paste text into the focused app.",
+                action: {
+                    Permissions.promptAccessibility()
+                    Permissions.openAccessibilitySettings()
+                }
+            )
+
+            if micOK && axOK {
+                Label("All set. Hold your hotkey and speak.", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            }
+            Spacer()
+        }
+        .padding(.vertical, 8)
+        .onAppear { startPolling() }
+        .onDisappear { stopPolling() }
+    }
+
+    private func startPolling() {
+        refresh()
+        stopPolling()
+        let timer = Timer(timeInterval: 1, repeats: true) { _ in
+            Task { @MainActor in refresh() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        pollTimer = timer
+    }
+
+    private func stopPolling() {
+        pollTimer?.invalidate()
+        pollTimer = nil
+    }
+
+    private func refresh() {
+        micOK = Permissions.microphoneGranted
+        axOK = Permissions.accessibilityGranted
+        controller?.permissionsMayHaveChanged()
+    }
+
+    private func permissionRow(granted: Bool, title: String, detail: String, action: @escaping () -> Void) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: granted ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(granted ? .green : .secondary)
+                .font(.title3)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.headline)
+                Text(detail).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if !granted {
+                Button("Grant…", action: action)
+            }
+        }
+    }
+}

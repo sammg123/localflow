@@ -29,6 +29,37 @@ enum HotkeyChoice: String, CaseIterable, Identifiable {
     }
 }
 
+/// The key held to ask a question about the screen. Separate from the dictation key.
+enum AskKeyChoice: String, CaseIterable, Identifiable {
+    case rightOption
+    case rightCommand
+    case off
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .rightOption: return "Right Option (⌥)"
+        case .rightCommand: return "Right Command (⌘)"
+        case .off: return "Off"
+        }
+    }
+
+    var hotkey: HotkeyChoice? {
+        switch self {
+        case .rightOption: return .rightOption
+        case .rightCommand: return .rightCommand
+        case .off: return nil
+        }
+    }
+
+    /// The key to listen on, or nil when Ask is off or would collide with dictation.
+    static func effectiveHotkey(ask: AskKeyChoice, dictation: HotkeyChoice) -> HotkeyChoice? {
+        guard let key = ask.hotkey, key != dictation else { return nil }
+        return key
+    }
+}
+
 enum PolishMode: String, CaseIterable, Identifiable {
     case appleIntelligence // FoundationModels on-device LLM + rules
     case rulesOnly
@@ -104,6 +135,22 @@ final class Settings: ObservableObject {
     @Published var saveHistoryToDisk: Bool {
         didSet { defaults.set(saveHistoryToDisk, forKey: "saveHistoryToDisk") }
     }
+    /// Hold this key to ask the local vision model about the screen.
+    @Published var askKey: AskKeyChoice {
+        didSet { defaults.set(askKey.rawValue, forKey: "askKey") }
+    }
+    /// Ollama model tag Ask uses. Must be a vision model.
+    @Published var askModel: String {
+        didSet { defaults.set(askModel, forKey: "askModel") }
+    }
+
+    static let defaultAskModel = "qwen3.5:9b"
+
+    /// The model tag to send, falling back to the default if the field was cleared.
+    var effectiveAskModel: String {
+        let trimmed = askModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? Self.defaultAskModel : trimmed
+    }
 
     private init() {
         hotkey = HotkeyChoice(rawValue: defaults.string(forKey: "hotkey") ?? "") ?? .fnKey
@@ -118,5 +165,7 @@ final class Settings: ObservableObject {
         spokenCommands = defaults.object(forKey: "spokenCommands") as? Bool ?? false
         saveHistoryToDisk = defaults.object(forKey: "saveHistoryToDisk") as? Bool ?? false
         liveWindowOnDoubleTap = defaults.object(forKey: "liveWindowOnDoubleTap") as? Bool ?? true
+        askKey = AskKeyChoice(rawValue: defaults.string(forKey: "askKey") ?? "") ?? .rightOption
+        askModel = defaults.string(forKey: "askModel") ?? Self.defaultAskModel
     }
 }

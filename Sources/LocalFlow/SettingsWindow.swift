@@ -31,7 +31,7 @@ final class SettingsWindowController {
             win.title = "LocalFlow Settings"
             win.styleMask = [.titled, .closable, .miniaturizable]
             win.isReleasedWhenClosed = false
-            win.setContentSize(NSSize(width: 480, height: 420))
+            win.setContentSize(NSSize(width: 480, height: 560))
             win.center()
             window = win
         }
@@ -80,6 +80,24 @@ struct SettingsView: View {
 
             Divider()
 
+            Picker("Ask key:", selection: $settings.askKey) {
+                ForEach(AskKeyChoice.allCases) { choice in
+                    Text(choice.label).tag(choice)
+                }
+            }
+            if settings.askKey != .off,
+               AskKeyChoice.effectiveHotkey(ask: settings.askKey, dictation: settings.hotkey) == nil {
+                Text("That's also the push-to-talk key, so Ask is off. Pick a different key.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+            TextField("Ask model:", text: $settings.askModel, prompt: Text(Settings.defaultAskModel))
+            Text("Hold to ask about what's on your screen. A local vision model in Ollama reads a screenshot and answers in a bubble. Tap the key again, tap the voice key, or click ✕ to close.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Divider()
+
             Picker("Speech engine:", selection: $settings.engine) {
                 ForEach(EngineChoice.allCases) { engine in
                     Text(engine.label).tag(engine)
@@ -113,6 +131,9 @@ struct SettingsView: View {
         .padding(.vertical, 8)
         .onChange(of: settings.hotkey) { _, newValue in
             controller?.hotkeyChanged(to: newValue)
+        }
+        .onChange(of: settings.askKey) { _, _ in
+            controller?.askKeyChanged()
         }
         .onChange(of: settings.engine) { _, _ in
             controller?.engineChanged()
@@ -170,6 +191,7 @@ struct SetupView: View {
     weak var controller: AppController?
     @State private var micOK = Permissions.microphoneGranted
     @State private var axOK = Permissions.accessibilityGranted
+    @State private var screenOK = Permissions.screenRecordingGranted
     @State private var pollTimer: Timer?
 
     var body: some View {
@@ -197,6 +219,13 @@ struct SetupView: View {
                     Permissions.promptAccessibility()
                     Permissions.openAccessibilitySettings()
                 }
+            )
+
+            permissionRow(
+                granted: screenOK,
+                title: "Screen Recording (for Ask)",
+                detail: "Lets Ask see your screen, only while you hold the Ask key. Optional.",
+                action: { Permissions.requestScreenRecording() }
             )
 
             if micOK && axOK {
@@ -228,6 +257,7 @@ struct SetupView: View {
     private func refresh() {
         micOK = Permissions.microphoneGranted
         axOK = Permissions.accessibilityGranted
+        screenOK = Permissions.screenRecordingGranted
         controller?.permissionsMayHaveChanged()
     }
 

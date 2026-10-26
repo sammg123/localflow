@@ -1,11 +1,26 @@
 import AppKit
 import SwiftUI
 
+/// The recording dot's color says which mode is listening.
+enum HUDAccent: Equatable {
+    case dictation
+    case command
+    case ask
+
+    var color: Color {
+        switch self {
+        case .dictation: return .red
+        case .command: return .purple
+        case .ask: return AnswerView.askBlue
+        }
+    }
+}
+
 @MainActor
 final class HUDModel: ObservableObject {
     enum HUDState: Equatable {
         case hidden
-        case recording(caption: String) // "Listening" / "Listening (hands-free)" / "Command — …"
+        case recording(caption: String, accent: HUDAccent) // "Listening" / "Command — …" / "Ask"
         case processing(String)         // "Transcribing…" / "Polishing…" / "Applying…"
         case notice(String)             // brief error/info flash
     }
@@ -41,9 +56,9 @@ final class HUDPanel {
         panel.contentView = NSHostingView(rootView: HUDView(model: model))
     }
 
-    func showRecording(caption: String) {
+    func showRecording(caption: String, accent: HUDAccent = .dictation) {
         hideTask?.cancel()
-        model.state = .recording(caption: caption)
+        model.state = .recording(caption: caption, accent: accent)
         position()
         panel.orderFrontRegardless()
     }
@@ -103,8 +118,8 @@ private struct HUDView: View {
             switch model.state {
             case .hidden:
                 EmptyView()
-            case .recording(let caption):
-                Circle().fill(caption.hasPrefix("Command") ? Color.purple : Color.red)
+            case .recording(let caption, let accent):
+                Circle().fill(accent.color)
                     .frame(width: 8, height: 8)
                 WaveformView(level: model.level)
                 Text(caption)

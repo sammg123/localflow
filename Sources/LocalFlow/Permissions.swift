@@ -16,6 +16,27 @@ enum Permissions {
         microphoneGranted && accessibilityGranted
     }
 
+    /// Only Ask needs this; dictation never looks at the screen.
+    static var screenRecordingGranted: Bool {
+        CGPreflightScreenCaptureAccess()
+    }
+
+    /// macOS shows its own prompt once; after that, go straight to the settings pane.
+    static func requestScreenRecording() {
+        let key = "screenRecordingRequested"
+        if UserDefaults.standard.bool(forKey: key) {
+            openScreenRecordingSettings()
+        } else {
+            UserDefaults.standard.set(true, forKey: key)
+            _ = CGRequestScreenCaptureAccess()
+        }
+    }
+
+    static func openScreenRecordingSettings() {
+        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!
+        NSWorkspace.shared.open(url)
+    }
+
     static func requestMicrophone() async -> Bool {
         await AVCaptureDevice.requestAccess(for: .audio)
     }

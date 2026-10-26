@@ -79,7 +79,8 @@ struct LogPrivacyTests {
             .filter { $0.hasSuffix(".swift") }
         #expect(!files.isEmpty)
         let banned = ["\\(raw)", "\\(text)", "\\(preCleaned)", "\\(polished)", "\\(transcript",
-                      "\\(selection)", "\\(instruction)", "\\(transformed)", "\\(frozen)", "\\(tailText)", "\\(shown)"]
+                      "\\(selection)", "\\(instruction)", "\\(transformed)", "\\(frozen)", "\\(tailText)", "\\(shown)",
+                      "\\(question)", "\\(heard)", "\\(answer)", "\\(model.answer)", "\\(token)"]
         var logCalls = 0
         for file in files {
             let code = try String(contentsOf: sources.appendingPathComponent(file), encoding: .utf8)

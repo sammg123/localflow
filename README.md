@@ -29,6 +29,8 @@ release ──► rule cleanup (fillers, replacements, spoken commands)
 | **Ctrl + hotkey** (hold) | Command mode: select text first, then speak an edit ("make this shorter", "turn into bullets") — the selection is replaced |
 | Esc while recording | Cancel |
 | Menu bar → Paste Last Transcript | Same as Ctrl + hotkey tap |
+| Hold **Right ⌥** (Ask key) | Ask about your screen: blue outline + blue pill while you talk; release and a local vision model answers in a bubble where the pill sits |
+| Tap Right ⌥ or Fn, or click ✕ | Close the answer (also cancels one still coming) |
 
 Command mode needs Apple Intelligence enabled (it's the edit engine) and isn't available when the main hotkey is ⌃⌥.
 
@@ -38,6 +40,17 @@ Notes:
 - Esc cancels the dictation but the keystroke also reaches the frontmost app (the hotkey listener is observe-only by design — it needs no Input Monitoring permission). Avoid Esc if the target app treats it destructively; a quick tap of the hotkey also cancels.
 - Spoken "new line" / "new paragraph" commands are off by default (Settings → General) because they can misfire on dictation that legitimately contains those phrases. When on, they only trigger as standalone clauses.
 - Hands-free recordings auto-stop at 5 minutes.
+
+## Ask (screen questions)
+
+Hold the Ask key (Right ⌥ by default, Settings → General) and ask a question out loud. LocalFlow screenshots the display under your pointer (leaving its own outline and pill out), transcribes the question with Parakeet, and sends both to a local vision model in [Ollama](https://ollama.com) at 127.0.0.1. The answer streams into a bubble with copy and ✕ buttons.
+
+- **Model:** `qwen3.5:9b` (6.6 GB download, about 6.4 GB in memory). Picked after testing the vision models on this M4 Max against real screenshots: it was the only small one that read every number correctly. `ollama pull qwen3.5:9b` once; change the tag in Settings.
+- **Memory:** the model starts loading when the press becomes a hold (so it loads while you talk) and unloads 5 minutes after the last answer.
+- **Speed (M4 Max, 36 GB):** about 5 s from release to a full answer with the model warm, 12-13 s from cold.
+- **Permission:** Screen Recording, asked for on first use. Dictation never needs it.
+- A quick tap of the Ask key only closes the bubble. Pressing another key while it's held (Option+arrow, Option+letter) cancels the ask, so Option shortcuts don't trigger it.
+- Weak spot: it reads screens reliably but multi-step reasoning (e.g. writing the next lines of code) can be wrong. Check its work.
 
 ## Diagnostics
 
@@ -49,7 +62,8 @@ Notes:
 
 ```bash
 cd ~/localflow
-swift test          # unit tests (clipboard, live loop, audio stats, log, render)
+swift test          # unit tests (clipboard, live loop, audio stats, log, render, Ask flow)
+LOCALFLOW_E2E=1 swift test   # + real Ollama answer and on-screen bubble/outline checks (flashes ~3 s)
 ./build.sh          # builds release, assembles ~/Applications/LocalFlow.app, signs
 ln -sf ~/localflow/bin/flow ~/.local/bin/flow
 open ~/Applications/LocalFlow.app
@@ -60,6 +74,7 @@ First run:
 2. Grant **Accessibility** (System Settings → Privacy & Security → Accessibility → enable LocalFlow). Needed to see the hotkey and to paste.
 3. Wait for the one-time Parakeet model download (~500 MB, progress in the menu bar status).
 4. For AI polish, Apple Intelligence must be enabled in System Settings.
+5. For Ask: `ollama pull qwen3.5:9b`, then allow **Screen Recording** the first time you hold the Ask key.
 
 **Ad-hoc signing caveat:** permissions are tied to the app's signature. After every rebuild you must re-toggle LocalFlow in Accessibility settings. If that gets old, create a free Apple Development certificate in Xcode and put its name in `build.sh`.
 

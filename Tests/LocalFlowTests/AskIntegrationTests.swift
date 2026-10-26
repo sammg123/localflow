@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import Carbon.HIToolbox
 import Foundation
 import Testing
 @testable import LocalFlow
@@ -60,6 +61,21 @@ struct AskEndToEndTests {
         print("E2E heard: \(heard)\nE2E image: \(png.count / 1024) KB\nE2E first token: \(firstToken.map { "\($0)" } ?? "-"), total \(started.duration(to: .now))\nE2E answer: \(answer)")
     }
 
+    @Test("a follow-up uses what was said earlier in the conversation", .timeLimit(.minutes(3)))
+    func followUpUsesMemory() async throws {
+        let screen = try #require(NSScreen.main)
+        let png = try await ScreenCapturer.capturePNG(of: screen)
+        let history = [AskTurn(question: "Pick a fruit at random and tell me which.", answer: "I picked a mango.")]
+        let body = OllamaChatBody.ask(model: Settings.defaultAskModel, question: "Which fruit did you pick?",
+                                      imageBase64: png.base64EncodedString(), history: history)
+        var answer = ""
+
+        for try await token in OllamaClient().stream(body) { answer += token }
+
+        print("E2E follow-up answer: \(answer)")
+        #expect(answer.lowercased().contains("mango"))
+    }
+
     /// `say` straight to 16 kHz mono float, the format the recorder hands the engine.
     private static func speak(_ text: String) throws -> [Float] {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("ask-e2e-\(UUID()).wav")
@@ -83,7 +99,7 @@ struct AskEndToEndTests {
 /// put back where it was. Run with LOCALFLOW_E2E=1 (posting the click needs the
 /// terminal to have Accessibility).
 @MainActor
-@Suite("Ask: on screen", .enabled(if: ProcessInfo.processInfo.environment["LOCALFLOW_E2E"] == "1"))
+@Suite("Ask: on screen", .serialized, .enabled(if: ProcessInfo.processInfo.environment["LOCALFLOW_E2E"] == "1"))
 struct AskOnScreenTests {
     @Test("bubble grows upward from the pill's spot and ✕ closes it on the first click")
     func bubbleStreamsAndCloses() async throws {
@@ -122,6 +138,60 @@ struct AskOnScreenTests {
 
         #expect(closed)
         #expect(!panel.isVisible)
+    }
+
+    @Test("the Ask window takes typing and edit shortcuts; Return sends and Esc cancels")
+    func composerTakesTyping() async throws {
+        _ = NSApplication.shared
+        NSApp.setActivationPolicy(.accessory)
+        let screen = try #require(NSScreen.main)
+        let composer = AskComposerPanel()
+        var sent: String?
+        var cancelled = false
+        composer.onSend = { sent = composer.model.question }
+        composer.onCancel = { cancelled = true }
+
+        composer.model.reset(mode: .typing)
+        composer.show(on: screen)
+        pump(0.5)
+        // (Key focus itself only exists in a launched app, not this test process; it was
+        // checked with a launched probe app. Here the events go straight to this process.)
+        typeIntoSelf("hi there")
+        pressKeyInSelf(UInt16(kVK_ANSI_A), flags: .maskCommand)
+        typeIntoSelf("What is the dominant strategy for player two?")
+        pump(0.3)
+        Self.snapshot(composer.frame, name: "live-composer")
+        pressKeyInSelf(UInt16(kVK_Return))
+        pump(0.2)
+        pressKeyInSelf(UInt16(kVK_Escape))
+        pump(0.2)
+        composer.hide()
+
+        #expect(sent == "What is the dominant strategy for player two?")
+        #expect(cancelled)
+        #expect(composer.frame.minY == screen.visibleFrame.minY + 28)
+    }
+
+    /// Key events go to this test process only, never to whatever app is in front.
+    private func typeIntoSelf(_ text: String) {
+        for character in text {
+            for down in [true, false] {
+                let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: down)
+                let utf16 = Array(String(character).utf16)
+                event?.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: utf16)
+                event?.postToPid(getpid())
+            }
+            pump(0.01)
+        }
+    }
+
+    private func pressKeyInSelf(_ key: UInt16, flags: CGEventFlags = []) {
+        for down in [true, false] {
+            let event = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: down)
+            event?.flags = flags
+            event?.postToPid(getpid())
+        }
+        pump(0.05)
     }
 
     @Test("outline covers the whole display")

@@ -77,6 +77,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         historyItem.submenu = historyMenu
         menu.addItem(historyItem)
 
+        let remembered = controller.askRememberedTurns
+        let forget = NSMenuItem(
+            title: remembered == 0 ? "Ask Has No Conversation Yet" : "Forget Ask Conversation (\(remembered))",
+            action: #selector(forgetAsk), keyEquivalent: "")
+        forget.target = self
+        forget.isEnabled = remembered > 0
+        menu.addItem(forget)
+
         menu.addItem(.separator())
 
         if !Permissions.allGranted {
@@ -113,6 +121,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     @objc private func clearHistory() { controller?.history.clear() }
+
+    @objc private func forgetAsk() { controller?.forgetAskConversation() }
 
     @objc private func openSettings() { controller?.openSettings() }
 

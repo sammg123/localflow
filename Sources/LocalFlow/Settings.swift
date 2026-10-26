@@ -139,6 +139,11 @@ final class Settings: ObservableObject {
     @Published var askKey: AskKeyChoice {
         didSet { defaults.set(askKey.rawValue, forKey: "askKey") }
     }
+    /// Ask remembers this many recent questions and answers for follow-ups; older ones
+    /// are forgotten. 0 = every question starts fresh.
+    @Published var askMemoryTurns: Int {
+        didSet { defaults.set(askMemoryTurns, forKey: "askMemoryTurns") }
+    }
     /// Ollama model tag Ask uses. Must be a vision model.
     @Published var askModel: String {
         didSet { defaults.set(askModel, forKey: "askModel") }
@@ -167,5 +172,6 @@ final class Settings: ObservableObject {
         liveWindowOnDoubleTap = defaults.object(forKey: "liveWindowOnDoubleTap") as? Bool ?? true
         askKey = AskKeyChoice(rawValue: defaults.string(forKey: "askKey") ?? "") ?? .rightOption
         askModel = defaults.string(forKey: "askModel") ?? Self.defaultAskModel
+        askMemoryTurns = defaults.object(forKey: "askMemoryTurns") as? Int ?? 5
     }
 }

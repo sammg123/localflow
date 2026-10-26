@@ -25,7 +25,7 @@ final class AppController {
         case dictation(handsFree: Bool)
         /// Fn+Ctrl: the utterance is an instruction applied to the selected text.
         case command
-        /// Ask key: the utterance is a question about the screen.
+        /// Ask key: talking into the Ask window (AskSession drives it).
         case ask
     }
 
@@ -47,6 +47,7 @@ final class AppController {
     /// Nil when Ask is off or its key collides with the dictation key.
     private var askHotkeyMonitor: HotkeyMonitor?
     private var ask: AskController!
+    private var askSession: AskSession!
     private var menuBar: MenuBarController!
     private var hud: HUDPanel!
     private var livePanel: LivePanel!
@@ -102,15 +103,35 @@ final class AppController {
         settingsWindow = SettingsWindowController(controller: self)
         llmPolisher = TranscriberFactory.makeLLMPolisher()
         ask = AskController(closeHint: askCloseHint)
+        askSession = AskSession(
+            mic: self,
+            composer: AskComposerPanel(),
+            answers: ask,
+            transcribe: { [weak self] samples in
+                guard let engine = self?.transcriber else { throw CancellationError() }
+                return try await engine.transcribe(samples: samples)
+            },
+            canOpen: { [weak self] in self?.askCanOpen() ?? false },
+            swallowPress: { [weak self] in self?.askHotkeyMonitor?.swallowCurrentPress() }
+        )
+        // Esc closes the Ask window from any app while it's open.
+        askSession.onPhaseChange = { [weak self] phase in
+            self?.askHotkeyMonitor?.escapeEnabled = phase.isOpen
+        }
 
         recorder.levelHandler = { [weak self] level in
             DispatchQueue.main.async {
                 self?.hud.updateLevel(level)
                 self?.livePanel.updateLevel(level)
+                self?.askSession.updateLevel(level)
             }
         }
         recorder.limitHandler = { [weak self] in
-            guard let self, case .recording = self.state else { return }
+            guard let self, case .recording(let mode) = self.state else { return }
+            if mode == .ask {
+                self.askSession.micStopped()
+                return
+            }
             // The notice itself is shown by process() at the end — flashing here would be
             // synchronously overwritten by "Transcribing…" before a single frame renders.
             self.pendingLimitNotice = true
@@ -120,7 +141,11 @@ final class AppController {
             guard let self, case .recording = self.state else { return }
             FlowLog.shared.write("capture lost mid-recording, input: \(AudioRecorder.currentInputName)")
             SoundPlayer.playError()
-            self.abortRecording(silent: false)
+            if case .recording(.ask) = self.state {
+                self.askSession.micLost()
+            } else {
+                self.abortRecording(silent: false)
+            }
             self.hud.flash("Lost the microphone, recording stopped. Try again", seconds: 3)
         }
 
@@ -159,6 +184,7 @@ final class AppController {
 
     func shutdown() {
         stopLiveWindow()
+        askSession?.cancel()
         ask?.dismiss()
         askHotkeyMonitor?.stopMonitoring()
         hotkeyMonitor?.stopMonitoring()
@@ -187,6 +213,16 @@ final class AppController {
         configureAskHotkey()
     }
 
+    var askRememberedTurns: Int { ask?.rememberedTurns ?? 0 }
+
+    func forgetAskConversation() {
+        ask.forgetConversation()
+    }
+
+    func askMemoryLimitChanged() {
+        ask.applyMemoryLimit()
+    }
+
     func engineChanged() {
         // The `transcriber` property already tracks settings; just warm the new engine.
         Task { await prepare(engine: transcriber) }
@@ -207,6 +243,8 @@ final class AppController {
 
     private func hotkeyPressed(command: Bool) {
         controlPressWithoutRecording = false
+        // The Ask window has the keyboard and sits where the dictation pill would.
+        guard !askSession.phase.isOpen else { return }
         // The voice key also closes an answer (and cancels one on its way).
         if ask.isActive { ask.dismiss() }
         switch state {
@@ -331,54 +369,43 @@ final class AppController {
 
     // MARK: - Ask key
 
+    private var askKeyName: String {
+        AskKeyChoice.effectiveHotkey(ask: settings.askKey, dictation: settings.hotkey)?.shortName ?? "Ask key"
+    }
+
     private var askCloseHint: String {
-        let askKey = AskKeyChoice.effectiveHotkey(ask: settings.askKey, dictation: settings.hotkey)
-        let keys = [askKey?.shortName, settings.hotkey.shortName ?? "⌃⌥"].compactMap { $0 }
-        return "Tap \(keys.joined(separator: " or ")) to close"
+        "\(askKeyName) to ask again   ·   \(settings.hotkey.shortName ?? "⌃⌥") to close"
     }
 
     private func configureAskHotkey() {
-        // The old monitor's release would never arrive: end an ask in progress first.
-        if case .recording(.ask) = state { abortRecording(silent: true) }
+        // The old monitor's release would never arrive: close an Ask in progress first.
+        askSession.cancel()
         askHotkeyMonitor?.stopMonitoring()
         askHotkeyMonitor = nil
         ask.updateCloseHint(askCloseHint)
+        askSession.keyName = askKeyName
         guard let key = AskKeyChoice.effectiveHotkey(ask: settings.askKey, dictation: settings.hotkey) else { return }
         let monitor = HotkeyMonitor(choice: key)
-        monitor.onPressBegan = { [weak self] _ in self?.askPressed() }
-        monitor.onPressEnded = { [weak self] held in self?.askReleased(held: held) }
-        monitor.onDoubleTap = { [weak self] in self?.askReleased(held: 0) }
-        monitor.onKeyDownWhileHeld = { [weak self] in self?.askInterrupted() }
+        let now = { ProcessInfo.processInfo.systemUptime }
+        monitor.onPressBegan = { [weak self] _ in self?.askSession.keyDown(at: now()) }
+        monitor.onPressEnded = { [weak self] held in self?.askSession.keyUp(held: held, at: now()) }
+        // The monitor reports a second quick tap as a double-tap; Ask times its own.
+        monitor.onDoubleTap = { [weak self] in self?.askSession.keyUp(held: 0, at: now()) }
+        monitor.onKeyDownWhileHeld = { [weak self] in self?.askSession.otherKey() }
+        monitor.onEscape = { [weak self] in self?.askSession.cancel() }
         monitor.startMonitoring()
         askHotkeyMonitor = monitor
     }
 
-    private func askPressed() {
-        // Pressing the ask key closes the last answer. A tap stops there; a hold asks again.
-        ask.dismiss()
-        switch state {
-        case .idle, .processing:
-            beginRecording(mode: .ask)
-        case .recording:
-            break // mid-dictation the ask key does nothing
+    /// Checked before the Ask window first appears: it can't see the screen without this.
+    private func askCanOpen() -> Bool {
+        guard Permissions.screenRecordingGranted else {
+            Permissions.requestScreenRecording()
+            SoundPlayer.playError()
+            hud.flash("Ask needs Screen Recording. Turn on LocalFlow in System Settings, then ask again", seconds: 4)
+            return false
         }
-    }
-
-    private func askReleased(held: TimeInterval) {
-        guard case .recording(.ask) = state else { return }
-        switch AskRelease.forHeld(held) {
-        case .ask:
-            finishRecording()
-        case .dismissOnly:
-            abortRecording(silent: true)
-        }
-    }
-
-    /// A key went down while the ask key was held: it was a shortcut like Option+letter.
-    private func askInterrupted() {
-        guard case .recording(.ask) = state else { return }
-        askHotkeyMonitor?.swallowCurrentPress()
-        abortRecording(silent: true)
+        return true
     }
 
     private func cancelDictation() {
@@ -391,12 +418,6 @@ final class AppController {
     private func beginRecording(mode: RecordingMode) {
         guard Permissions.allGranted else {
             settingsWindow.show(tab: .setup)
-            return
-        }
-        if case .ask = mode, !Permissions.screenRecordingGranted {
-            Permissions.requestScreenRecording()
-            SoundPlayer.playError()
-            hud.flash("Ask needs Screen Recording. Turn on LocalFlow in System Settings, then ask again", seconds: 4)
             return
         }
         if case .command = mode, !llmPolisher.isAvailable {
@@ -448,16 +469,7 @@ final class AppController {
                 SoundPlayer.playStart()
             }
         case .ask:
-            ask.beginListening()
-            // Like command mode: a quick tap only closes the last answer, so the outline,
-            // pill and chime wait until this is clearly a hold.
-            Task { [weak self] in
-                try? await Task.sleep(for: .seconds(HotkeyMonitor.tapThreshold))
-                guard let self, self.recordingID == id, case .recording(.ask) = self.state else { return }
-                self.ask.startLooking()
-                self.hud.showRecording(caption: "Ask", accent: .ask)
-                SoundPlayer.playStart()
-            }
+            break // Ask's mic starts through startAsk()
         }
     }
 
@@ -509,7 +521,10 @@ final class AppController {
     }
 
     private func abortRecording(silent: Bool) {
-        if case .recording(.ask) = state { ask.cancelListening() }
+        if case .recording(.ask) = state {
+            askSession.micLost()
+            return
+        }
         stopLiveWindow()
         recorder.cancel()
         state = .idle
@@ -524,6 +539,10 @@ final class AppController {
 
     private func finishRecording() {
         guard case .recording(let mode) = state else { return }
+        if mode == .ask {
+            askSession.micStopped() // finishes through stopAsk()
+            return
+        }
         stopLiveWindow()
         let samples = recorder.stop()
         hotkeyMonitor.escapeEnabled = false
@@ -533,7 +552,6 @@ final class AppController {
         FlowLog.shared.write(String(format: "recording stopped: %.1fs, peak %.4f", duration, AudioStats.peak(samples)))
         guard duration >= 0.3 else {
             state = .idle
-            if case .ask = mode { ask.cancelListening() }
             if recorder.lastStopWasStalled {
                 // Long enough to count, but not one buffer of audio arrived: the input
                 // is wedged. Say so (this used to vanish silently) and start the next
@@ -544,15 +562,6 @@ final class AppController {
             } else {
                 hud.hide()
             }
-            return
-        }
-
-        if case .ask = mode {
-            // Ask runs on its own, outside processChain: a slow answer must never hold
-            // up the next dictation's paste.
-            state = .idle
-            hud.hide()
-            ask.answer(samples: samples, engine: transcriber)
             return
         }
 
@@ -736,4 +745,60 @@ final class AppController {
             if hudActive() { hud.flash("Copied to clipboard — \(reason)", seconds: 3.5) }
         }
     }
+}
+
+// MARK: - The microphone, lent to Ask
+
+extension AppController: AskMicrophone {
+    func startAsk() -> Bool {
+        switch state {
+        case .idle, .processing: break
+        case .recording: return false // a dictation has the mic
+        }
+        guard Permissions.allGranted else {
+            settingsWindow.show(tab: .setup)
+            return false
+        }
+        let engine = transcriber
+        guard engine.state == .ready else {
+            hud.flash(engine.state == .downloadingModel ? "Still downloading the speech model…" : "Speech model not ready yet")
+            return false
+        }
+        do {
+            try recorder.start()
+        } catch {
+            FlowLog.shared.write("mic start failed: \(error.localizedDescription), input: \(AudioRecorder.currentInputName)")
+            SoundPlayer.playError()
+            hud.flash("Couldn't start the microphone: \(error.localizedDescription)")
+            return false
+        }
+        // Ask runs outside processChain: a slow answer never holds up a dictation's paste.
+        state = .recording(.ask)
+        menuBar.setIcon(recording: true)
+        return true
+    }
+
+    func stopAsk() -> [Float] {
+        guard case .recording(.ask) = state else { return [] }
+        let samples = recorder.stop()
+        state = .idle
+        menuBar.setIcon(recording: false)
+        let duration = Double(samples.count) / AudioRecorder.targetSampleRate
+        FlowLog.shared.write(String(format: "ask recording stopped: %.1fs, peak %.4f", duration, AudioStats.peak(samples)))
+        if recorder.lastStopWasStalled {
+            recorder.rebuild(reason: "ask recording came back empty")
+        }
+        return samples
+    }
+
+    func discardAsk() {
+        guard case .recording(.ask) = state else { return }
+        recorder.cancel()
+        state = .idle
+        menuBar.setIcon(recording: false)
+    }
+
+    var capturedSampleCount: Int { recorder.capturedSampleCount }
+
+    func samples(in range: Range<Int>) -> [Float] { recorder.samples(in: range) }
 }

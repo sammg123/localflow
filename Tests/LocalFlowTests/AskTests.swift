@@ -66,6 +66,17 @@ struct OllamaProtocolTests {
         #expect(AskError.from(URLError(code)) == .ollamaNotRunning)
     }
 
+    @Test("the log gets the kind of failure, never the text inside it", arguments: [
+        (AskError.ollama("the user's question was: what's my SSN"), "ollama"),
+        (.modelMissing("qwen3.5:9b"), "modelMissing"),
+        (.screenCaptureFailed("denied"), "screenCaptureFailed"),
+        (.ollamaNotRunning, "ollamaNotRunning"),
+        (.timedOut, "timedOut"),
+    ])
+    func logName(error: AskError, expected: String) {
+        #expect(error.logName == expected)
+    }
+
     @Test("a stalled model is a timeout, not a crash")
     func timeout() {
         #expect(AskError.from(URLError(.timedOut)) == .timedOut)
@@ -102,12 +113,6 @@ struct AskKeyChoiceTests {
         #expect(AskKeyChoice.effectiveHotkey(ask: ask, dictation: dictation) == expected)
     }
 
-    @Test("a quick tap closes, a hold asks")
-    func releaseMeaning() {
-        #expect(AskRelease.forHeld(0.1) == .dismissOnly)
-        #expect(AskRelease.forHeld(HotkeyMonitor.tapThreshold) == .ask)
-        #expect(AskRelease.forHeld(2.5) == .ask)
-    }
 }
 
 @Suite("Ask: answer formatting")
@@ -137,6 +142,19 @@ struct AnswerFormatterTests {
     }
 }
 
+@Suite("Ask: joining typed and spoken words")
+struct AskTextTests {
+    @Test("spoken words follow typed ones with one space", arguments: [
+        ("", "what's this", "what's this"),
+        ("In this table,", "which dominates", "In this table, which dominates"),
+        ("Typed ", "  spoken  ", "Typed spoken"),
+        ("Typed", "", "Typed"),
+    ])
+    func joins(typed: String, spoken: String, expected: String) {
+        #expect(AskText.join(typed, spoken) == expected)
+    }
+}
+
 @MainActor
 @Suite("Ask: rendering")
 struct AskRenderTests {
@@ -161,6 +179,55 @@ struct AskRenderTests {
         #expect(image.size.width == AnswerPanel.width)
         #expect(image.size.height > 60)
         try saveSnapshot(image, name: "answer-\(phase.snapshotName)")
+    }
+
+    @Test("the Ask window renders in each mode", arguments: [
+        (ComposerMode.voice, ""),
+        (.voice, "What's the Nash equilibrium in this table, and which strategy is dominant for player two?"),
+        (.finishing, "What's the Nash equilibrium in this table?"),
+        (.typing, ""),
+    ])
+    func rendersComposer(mode: ComposerMode, text: String) throws {
+        let model = ComposerModel()
+        model.mode = mode
+        model.text = text
+        model.level = 0.5
+        model.keyName = "Right ⌥"
+        let renderer = ImageRenderer(content: AskComposerView(model: model))
+        renderer.scale = 2
+
+        let image = try #require(renderer.nsImage)
+
+        #expect(image.size == AskComposerView.size)
+        try saveSnapshot(image, name: "composer-\(mode)-\(text.count)")
+    }
+
+    @Test("the window's title and hint say what the key does in each mode")
+    func composerCopy() {
+        let model = ComposerModel()
+        model.keyName = "Right ⌥"
+
+        model.mode = .voice
+        #expect(model.title == "Listening")
+        #expect(model.hint.contains("Right ⌥ to stop"))
+        model.mode = .typing
+        #expect(model.hint.contains("Right ⌥ to talk"))
+        #expect(model.hint.contains("Return to send"))
+    }
+
+    @Test("send is off only when there's nothing to send")
+    func canSend() {
+        let model = ComposerModel()
+
+        model.mode = .typing
+        #expect(!model.canSend)
+        model.text = "  "
+        #expect(!model.canSend)
+        model.text = "why?"
+        #expect(model.canSend)
+        model.mode = .voice
+        model.text = ""
+        #expect(model.canSend)
     }
 
     @Test("screen glow renders at the screen's size")
@@ -190,5 +257,46 @@ private extension AnswerPhase {
         case .done: return "done"
         case .failed: return "failed"
         }
+    }
+}
+
+@Suite("Ask: conversation memory")
+struct AskMemoryTests {
+    private let one = AskTurn(question: "What's this slide?", answer: "Nash equilibrium.")
+    private let two = AskTurn(question: "Define it", answer: "Each player's best response.")
+    private let three = AskTurn(question: "Example?", answer: "Prisoner's dilemma.")
+
+    @Test("keeps the newest turns and forgets the oldest past the limit")
+    func rollsOff() {
+        let remembered = AskMemory.remembering([one, two], adding: three, limit: 2)
+
+        #expect(remembered == [two, three])
+    }
+
+    @Test("a limit of zero remembers nothing")
+    func limitZero() {
+        #expect(AskMemory.remembering([one], adding: two, limit: 0).isEmpty)
+    }
+
+    @Test("history fits a size budget, dropping the oldest turns first")
+    func historyBudget() {
+        let long = AskTurn(question: String(repeating: "q", count: 600), answer: String(repeating: "a", count: 600))
+
+        let kept = AskMemory.fitting([long, one, two], budget: 200)
+
+        #expect(kept == [one, two])
+        #expect(AskMemory.fitting([one, two], budget: 0).isEmpty)
+    }
+
+    @Test("follow-ups carry earlier turns as text, and only the newest question has the screenshot")
+    func bodyWithHistory() {
+        let body = OllamaChatBody.ask(model: "m", question: "And player two?", imageBase64: "IMG", history: [one, two])
+
+        #expect(body.messages.map(\.role) == ["system", "user", "assistant", "user", "assistant", "user"])
+        #expect(body.messages[1].content == one.question)
+        #expect(body.messages[2].content == one.answer)
+        #expect(body.messages.dropLast().allSatisfy { $0.images == nil })
+        #expect(body.messages.last?.images == ["IMG"])
+        #expect(body.messages.last?.content == "And player two?")
     }
 }

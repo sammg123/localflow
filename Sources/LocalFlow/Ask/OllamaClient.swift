@@ -1,5 +1,32 @@
 import Foundation
 
+/// One finished question and answer, kept so follow-ups have context.
+struct AskTurn: Equatable {
+    let question: String
+    let answer: String
+}
+
+/// The rolling conversation: the last N turns, oldest forgotten first. Text only;
+/// old screenshots are never kept or re-sent.
+enum AskMemory {
+    static func remembering(_ turns: [AskTurn], adding turn: AskTurn, limit: Int) -> [AskTurn] {
+        guard limit > 0 else { return [] }
+        return Array((turns + [turn]).suffix(limit))
+    }
+
+    /// The newest turns whose text fits `budget` characters, oldest dropped first.
+    static func fitting(_ turns: [AskTurn], budget: Int) -> [AskTurn] {
+        var used = 0
+        var kept: [AskTurn] = []
+        for turn in turns.reversed() {
+            used += turn.question.count + turn.answer.count
+            guard used <= budget else { break }
+            kept.insert(turn, at: 0)
+        }
+        return kept
+    }
+}
+
 /// The /api/chat request Ask sends to the local Ollama server.
 struct OllamaChatBody: Encodable, Equatable {
     struct Message: Encodable, Equatable {
@@ -29,7 +56,9 @@ struct OllamaChatBody: Encodable, Equatable {
     what they are looking at. They asked a question out loud (it was transcribed, so it may \
     have small errors). Answer it from what is on the screen. Lead with the answer in one or \
     two sentences, then add detail only if it helps. Stay under 120 words. No headings and no \
-    tables. Put code in fenced code blocks.
+    tables. Put code in fenced code blocks. Earlier questions and answers in this conversation \
+    were about earlier screenshots you can no longer see; use them only as context for \
+    follow-ups. The attached image is the screen right now.
     """
 
     let model: String
@@ -44,13 +73,17 @@ struct OllamaChatBody: Encodable, Equatable {
         case keepAlive = "keep_alive"
     }
 
-    static func ask(model: String, question: String, imageBase64: String) -> OllamaChatBody {
-        OllamaChatBody(
+    static func ask(model: String, question: String, imageBase64: String,
+                    history: [AskTurn] = []) -> OllamaChatBody {
+        let earlier = history.flatMap { turn in
+            [Message(role: "user", content: turn.question, images: nil),
+             Message(role: "assistant", content: turn.answer, images: nil)]
+        }
+        return OllamaChatBody(
             model: model,
-            messages: [
-                Message(role: "system", content: systemPrompt, images: nil),
-                Message(role: "user", content: question, images: [imageBase64]),
-            ],
+            messages: [Message(role: "system", content: systemPrompt, images: nil)]
+                + earlier
+                + [Message(role: "user", content: question, images: [imageBase64])],
             stream: true,
             // Thinking mode took over 5 minutes per answer on qwen3.5:9b in testing.
             think: false,
@@ -90,6 +123,18 @@ enum AskError: Error, Equatable {
     case ollama(String)
     case timedOut
     case screenCaptureFailed(String)
+
+    /// The kind of failure, for the log. Never the text inside it, which can echo what
+    /// the user asked.
+    var logName: String {
+        switch self {
+        case .ollamaNotRunning: return "ollamaNotRunning"
+        case .modelMissing: return "modelMissing"
+        case .ollama: return "ollama"
+        case .timedOut: return "timedOut"
+        case .screenCaptureFailed: return "screenCaptureFailed"
+        }
+    }
 
     /// What the answer bubble says. Written for the user, with the fix in it.
     var message: String {

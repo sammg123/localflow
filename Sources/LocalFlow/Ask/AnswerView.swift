@@ -62,7 +62,7 @@ struct AnswerView: View {
         .frame(width: AnswerPanel.width, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Color.black.opacity(0.9))
+                .fill(Color.black.opacity(0.96))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 20, style: .continuous)

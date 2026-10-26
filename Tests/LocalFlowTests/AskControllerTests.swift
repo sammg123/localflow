@@ -90,14 +90,13 @@ struct AskControllerTests {
         }
     }
 
-    @Test("hold, ask, and the answer streams into the bubble")
+    @Test("send a question and the answer streams into the bubble")
     func happyPath() async {
         let controller = makeController()
 
-        controller.beginListening()
-        controller.startLooking()
+        controller.prepare(on: nil)
         #expect(indicator.isShowing)
-        controller.answer(samples: [0.1], engine: FakeTranscriber(text: "What's my CI?"))
+        controller.submit("What's my CI?")
         await settle(controller)
 
         #expect(surface.isVisible)
@@ -110,57 +109,53 @@ struct AskControllerTests {
         #expect(body?.model == Settings.shared.effectiveAskModel)
     }
 
-    @Test("a tap does no heavy work: no screenshot, no model load")
-    func tapIsCheap() async {
-        var captured = false
-        let controller = makeController(capture: { _ in captured = true; return Data() })
-
-        controller.beginListening()
-        controller.cancelListening()
-        try? await Task.sleep(for: .milliseconds(30))
-
-        #expect(!captured)
-        #expect(client.preloads.isEmpty)
-        #expect(!indicator.isShowing)
-    }
-
-    @Test("holding loads the model while the user is still talking")
-    func holdPreloads() async {
+    @Test("opening the window loads the model while the user talks or types")
+    func preparePreloads() async {
         let controller = makeController()
 
-        controller.beginListening()
-        controller.startLooking()
+        controller.prepare(on: nil)
         try? await Task.sleep(for: .milliseconds(30))
 
         #expect(client.preloads == [Settings.shared.effectiveAskModel])
+        #expect(!surface.isVisible)
     }
 
-    @Test("a release that beats the hold step still takes the screenshot")
-    func releaseBeforeLooking() async {
-        var captured = false
-        let controller = makeController(capture: { _ in captured = true; return Data([9]) })
+    @Test("the screenshot is taken when the question is sent, not before")
+    func capturesAtSend() async {
+        var captures = 0
+        let controller = makeController(capture: { _ in captures += 1; return Data([9]) })
 
-        controller.beginListening()
-        controller.answer(samples: [0.1], engine: FakeTranscriber(text: "What is this?"))
+        controller.prepare(on: nil)
+        try? await Task.sleep(for: .milliseconds(20))
+        #expect(captures == 0)
+        controller.submit("What is this?")
         await settle(controller)
 
-        #expect(captured)
+        #expect(captures == 1)
         #expect(surface.model.phase == .done)
     }
 
-    @Test("silence says so instead of asking the model")
-    func emptyQuestion() async {
+    @Test("a blank question never reaches the model")
+    func blankQuestion() async {
         let controller = makeController()
 
-        controller.beginListening()
-        controller.answer(samples: [0], engine: FakeTranscriber(text: "  "))
-        for _ in 0..<100 where surface.model.phase == .looking {
-            try? await Task.sleep(for: .milliseconds(5))
-        }
+        controller.prepare(on: nil)
+        controller.submit("   \n ")
+        await settle(controller)
 
-        #expect(surface.model.phase == .failed("Didn't catch a question. Hold the Ask key and ask again."))
         #expect(client.bodies.isEmpty)
-        controller.dismiss()
+        #expect(!surface.isVisible)
+        #expect(!indicator.isShowing)
+    }
+
+    @Test("cancelling the window takes the outline down")
+    func cancelPreparing() {
+        let controller = makeController()
+
+        controller.prepare(on: nil)
+        controller.cancelPreparing()
+
+        #expect(!indicator.isShowing)
     }
 
     @Test("an Ollama failure shows the fix in the bubble", arguments: [
@@ -171,8 +166,8 @@ struct AskControllerTests {
         client.tokens = []
         let controller = makeController()
 
-        controller.beginListening()
-        controller.answer(samples: [0.1], engine: FakeTranscriber(text: "What is this?"))
+        controller.prepare(on: nil)
+        controller.submit("What is this?")
         await settle(controller)
 
         #expect(surface.model.phase == .failed(error.message))
@@ -183,9 +178,8 @@ struct AskControllerTests {
     func captureFailure() async {
         let controller = makeController(capture: { _ in throw AskError.screenCaptureFailed("denied") })
 
-        controller.beginListening()
-        controller.startLooking()
-        controller.answer(samples: [0.1], engine: FakeTranscriber(text: "What is this?"))
+        controller.prepare(on: nil)
+        controller.submit("What is this?")
         await settle(controller)
 
         #expect(surface.model.phase == .failed(AskError.screenCaptureFailed("denied").message))
@@ -198,8 +192,7 @@ struct AskControllerTests {
         client.tokenDelay = .milliseconds(40)
         let controller = makeController()
 
-        controller.beginListening()
-        controller.answer(samples: [0.1], engine: FakeTranscriber(text: "Count for me"))
+        controller.submit("Count for me")
         for _ in 0..<100 where surface.model.answer.isEmpty {
             try? await Task.sleep(for: .milliseconds(5))
         }
@@ -216,8 +209,7 @@ struct AskControllerTests {
     @Test("the ✕ button closes through the controller")
     func closeButton() async {
         let controller = makeController()
-        controller.beginListening()
-        controller.answer(samples: [0.1], engine: FakeTranscriber(text: "What is this?"))
+        controller.submit("What is this?")
         await settle(controller)
 
         surface.onClose?()
@@ -230,8 +222,110 @@ struct AskControllerTests {
     func closeHint() {
         let controller = makeController()
 
-        controller.updateCloseHint("Tap Right ⌥ or Fn to close")
+        controller.updateCloseHint("Fn to close")
 
-        #expect(surface.closeHint == "Tap Right ⌥ or Fn to close")
+        #expect(surface.closeHint == "Fn to close")
+    }
+}
+
+@MainActor
+@Suite("Ask: controller memory")
+struct AskControllerMemoryTests {
+    let client = FakeModelClient()
+    let surface = FakeSurface()
+
+    private func makeController(limit: @escaping @MainActor () -> Int = { 5 }) -> AskController {
+        AskController(client: client, surface: surface, indicator: FakeIndicator(),
+                      capture: { _ in Data([1]) }, memoryLimit: limit, closeHint: "")
+    }
+
+    private func ask(_ controller: AskController, _ question: String) async {
+        controller.submit(question)
+        for _ in 0..<200 where controller.isRunning {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
+    @Test("a follow-up sends the earlier question and answer along")
+    func followUpHasContext() async {
+        let controller = makeController()
+
+        await ask(controller, "What's this slide?")
+        await ask(controller, "Give me an example")
+
+        let second = client.bodies[1].messages
+        #expect(second.map(\.role) == ["system", "user", "assistant", "user"])
+        #expect(second[1].content == "What's this slide?")
+        #expect(second[2].content == "Your CI is 3.62 to 3.75.")
+        #expect(controller.rememberedTurns == 2)
+    }
+
+    @Test("only the last N chats are kept")
+    func limitApplies() async {
+        let controller = makeController(limit: { 2 })
+
+        for question in ["One?", "Two?", "Three?", "Four?"] {
+            await ask(controller, question)
+        }
+
+        #expect(controller.rememberedTurns == 2)
+        let last = client.bodies[3].messages
+        #expect(last.filter { $0.role == "user" }.map(\.content) == ["Two?", "Three?", "Four?"])
+    }
+
+    @Test("a failed answer isn't remembered")
+    func failuresNotRemembered() async {
+        client.failure = AskError.timedOut
+        client.tokens = ["partial"]
+        let controller = makeController()
+
+        await ask(controller, "What's this?")
+
+        #expect(controller.rememberedTurns == 0)
+    }
+
+    @Test("forgetting clears the conversation")
+    func forget() async {
+        let controller = makeController()
+        await ask(controller, "What's this slide?")
+
+        controller.forgetConversation()
+
+        #expect(controller.rememberedTurns == 0)
+    }
+
+    @Test("Forget pressed while an answer is still typing keeps that answer out too")
+    func forgetMidAnswer() async {
+        client.tokens = ["one ", "two ", "three"]
+        client.tokenDelay = .milliseconds(30)
+        let controller = makeController()
+
+        controller.submit("Count for me")
+        for _ in 0..<100 where surface.model.answer.isEmpty {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        controller.forgetConversation()
+        for _ in 0..<200 where controller.isRunning {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+
+        #expect(surface.model.phase == .done)
+        #expect(controller.rememberedTurns == 0)
+    }
+
+    @Test("lowering the limit forgets the extra turns right away")
+    func lowerLimitTrims() async {
+        var limit = 5
+        let controller = makeController(limit: { limit })
+        for question in ["One?", "Two?", "Three?"] {
+            await ask(controller, question)
+        }
+
+        limit = 1
+        controller.applyMemoryLimit()
+        #expect(controller.rememberedTurns == 1)
+        limit = 0
+        controller.applyMemoryLimit()
+        #expect(controller.rememberedTurns == 0)
     }
 }

@@ -1,16 +1,6 @@
 import AppKit
 import Foundation
 
-/// What releasing the Ask key means: a quick tap only closes the last answer.
-enum AskRelease: Equatable {
-    case ask
-    case dismissOnly
-
-    static func forHeld(_ held: TimeInterval) -> AskRelease {
-        held >= HotkeyMonitor.tapThreshold ? .ask : .dismissOnly
-    }
-}
-
 /// Where the answer shows. The floating bubble in the app; a fake in tests.
 @MainActor
 protocol AnswerSurface: AnyObject {
@@ -32,11 +22,9 @@ protocol ListeningIndicator: AnyObject {
 extension AnswerPanel: AnswerSurface {}
 extension ScreenGlow: ListeningIndicator {}
 
-/// Ask mode: hold the Ask key, speak a question about the screen, get a typed answer
-/// from a local vision model in a bubble where the pill appears.
-///
-/// The recording itself belongs to AppController (one mic, one state machine). This
-/// owns everything Ask adds: the screenshot, the outline, the model call, the bubble.
+/// Ask's answering half: takes a finished question, screenshots the display, streams
+/// the local vision model's answer into a bubble where the pill appears, and remembers
+/// the last few turns for follow-ups. The Ask window (AskSession) writes the question.
 @MainActor
 final class AskController {
     typealias ScreenCapture = @MainActor (NSScreen?) async throws -> Data
@@ -45,25 +33,27 @@ final class AskController {
     private let answerPanel: AnswerSurface
     private let glow: ListeningIndicator
     private let captureScreen: ScreenCapture
-    private let rules = RulesPolisher()
+    /// How many finished questions to remember for follow-ups (read per ask).
+    private let memoryLimit: @MainActor () -> Int
     private let settings = Settings.shared
+    /// In memory only: gone on quit, never written to disk or the log.
+    private var turns: [AskTurn] = []
+    /// Bumped by Forget, so an answer still arriving when it's pressed isn't remembered.
+    private var memoryEpoch = 0
 
     private var screen: NSScreen?
-    /// Started on key-down, so the screenshot is what the user saw when they pressed.
-    private var capture: Task<Result<Data, Error>, Never>?
     private var run: Task<Void, Never>?
-    /// Bumped by every dismiss/answer so a cancelled run can never touch a newer bubble.
+    /// Bumped by every dismiss/submit so a cancelled run can never touch a newer bubble.
     private var generation = 0
-
-    /// How long "didn't catch a question" stays up before the bubble closes itself.
-    private static let emptyQuestionDismissDelay: Duration = .seconds(3)
 
     init(client: AskModelClient = OllamaClient(),
          surface: AnswerSurface? = nil,
          indicator: ListeningIndicator? = nil,
          capture: @escaping ScreenCapture = AskController.captureDisplay,
+         memoryLimit: @escaping @MainActor () -> Int = { Settings.shared.askMemoryTurns },
          closeHint: String) {
         self.client = client
+        self.memoryLimit = memoryLimit
         answerPanel = surface ?? AnswerPanel(closeHint: closeHint)
         glow = indicator ?? ScreenGlow()
         captureScreen = capture
@@ -79,58 +69,56 @@ final class AskController {
     /// A bubble is up or an answer is on its way.
     var isActive: Bool { answerPanel.isVisible || run != nil }
 
-    /// An answer is being worked on (transcribing, capturing, or streaming).
+    /// An answer is being worked on (capturing or streaming).
     var isRunning: Bool { run != nil }
+
+    var rememberedTurns: Int { turns.count }
+
+    func forgetConversation() {
+        turns = []
+        memoryEpoch += 1
+    }
+
+    /// The memory setting changed: a lower limit forgets the extra turns now, not later.
+    func applyMemoryLimit() {
+        turns = Array(turns.suffix(max(0, memoryLimit())))
+    }
 
     func updateCloseHint(_ hint: String) {
         answerPanel.updateCloseHint(hint)
     }
 
-    /// Key down: note which display the user is on. Nothing heavier yet: the press may
-    /// turn out to be a tap (close) or part of a shortcut like Option+arrow.
-    func beginListening() {
+    /// The Ask window is opening: close the last answer, start loading the model while
+    /// the user talks or types, and outline the screen (left out of the screenshot).
+    func prepare(on screen: NSScreen?) {
         dismiss()
-        screen = ScreenCapturer.screenUnderMouse()
-    }
-
-    /// The press is clearly a hold: take the screenshot, start loading the model while
-    /// the user talks, then put the outline up (it is left out of the screenshot).
-    func startLooking() {
-        if capture == nil { capture = makeCapture() }
+        self.screen = screen
         let client = self.client
         let model = settings.effectiveAskModel
         Task.detached(priority: .utility) { await client.preload(model: model) }
         glow.show(on: screen)
     }
 
-    private func makeCapture() -> Task<Result<Data, Error>, Never> {
-        let screen = self.screen
-        let captureScreen = self.captureScreen
-        return Task { @MainActor in
-            do {
-                return .success(try await captureScreen(screen))
-            } catch {
-                return .failure(error)
-            }
-        }
-    }
-
-    func cancelListening() {
-        capture?.cancel()
-        capture = nil
+    /// The Ask window closed without sending.
+    func cancelPreparing() {
         glow.hide()
     }
 
-    /// Key up: transcribe the question, then answer it from the screenshot.
-    func answer(samples: [Float], engine: Transcriber) {
-        // A release right at the hold threshold can beat startLooking(); capture now.
-        let capture = self.capture ?? makeCapture()
-        self.capture = nil
+    /// Answer a question about the screen as it is right now.
+    func submit(_ question: String) {
+        let question = String(question.trimmingCharacters(in: .whitespacesAndNewlines)
+            .prefix(AskLimits.maxQuestionLength))
+        guard !question.isEmpty else {
+            glow.hide()
+            return
+        }
         generation += 1
         let current = generation
         answerPanel.show(on: screen)
+        answerPanel.model.question = question
+        glow.show(on: screen)
         run = Task { [weak self] in
-            await self?.respond(samples: samples, engine: engine, capture: capture, generation: current)
+            await self?.respond(question: question, generation: current)
             if self?.generation == current { self?.run = nil }
         }
     }
@@ -139,15 +127,15 @@ final class AskController {
         generation += 1
         run?.cancel()
         run = nil
-        cancelListening()
+        glow.hide()
         answerPanel.hide()
     }
 
-    private func respond(samples: [Float], engine: Transcriber,
-                         capture: Task<Result<Data, Error>, Never>, generation: Int) async {
+    private func respond(question: String, generation: Int) async {
         let model = answerPanel.model
         let isCurrent = { [weak self] in self?.generation == generation && !Task.isCancelled }
         let started = ContinuousClock.now
+        let epoch = memoryEpoch
         func fail(_ message: String) {
             guard isCurrent() else { return }
             glow.hide()
@@ -155,38 +143,20 @@ final class AskController {
             SoundPlayer.playError()
         }
 
-        let question: String
-        do {
-            let raw = try await engine.transcribe(samples: samples)
-            question = rules.apply(raw, category: .other, replacements: settings.replacements,
-                                   spokenCommands: false, toneMatching: false)
-        } catch {
-            FlowLog.shared.write("ask transcription failed: \(error.localizedDescription)")
-            fail("Couldn't transcribe the question: \(error.localizedDescription)")
-            return
-        }
-        guard isCurrent() else { return }
-        guard !question.isEmpty else {
-            fail("Didn't catch a question. Hold the Ask key and ask again.")
-            try? await Task.sleep(for: Self.emptyQuestionDismissDelay)
-            if isCurrent() { dismiss() }
-            return
-        }
-        model.question = question
-
         let png: Data
-        switch await capture.value {
-        case .success(let data):
-            png = data
-        case .failure(let error):
+        do {
+            png = try await captureScreen(screen)
+        } catch {
             FlowLog.shared.write("ask screen capture failed: \(error.localizedDescription)")
             fail((error as? AskError)?.message ?? AskError.screenCaptureFailed(error.localizedDescription).message)
             return
         }
         guard isCurrent() else { return }
 
+        let limit = max(0, memoryLimit())
+        let history = AskMemory.fitting(Array(turns.suffix(limit)), budget: AskLimits.historyBudget)
         let body = OllamaChatBody.ask(model: settings.effectiveAskModel, question: question,
-                                      imageBase64: png.base64EncodedString())
+                                      imageBase64: png.base64EncodedString(), history: history)
         var firstToken: Duration?
         do {
             for try await token in client.stream(body) {
@@ -204,10 +174,14 @@ final class AskController {
                 return
             }
             model.phase = .done
+            if epoch == memoryEpoch {
+                turns = AskMemory.remembering(turns, adding: AskTurn(question: question, answer: model.answer),
+                                              limit: max(0, memoryLimit()))
+            }
             FlowLog.shared.write("ask answered: question \(question.count) chars, image \(png.count / 1024) KB, "
                 + "first token \(firstToken.map { "\($0)" } ?? "-"), \(model.answer.count) chars in \(started.duration(to: .now))")
         } catch {
-            FlowLog.shared.write("ask failed: \(error)")
+            FlowLog.shared.write("ask failed: \((error as? AskError)?.logName ?? String(describing: type(of: error)))")
             fail((error as? AskError)?.message ?? error.localizedDescription)
         }
     }

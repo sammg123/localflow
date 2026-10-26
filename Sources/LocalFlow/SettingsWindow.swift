@@ -92,7 +92,12 @@ struct SettingsView: View {
                     .foregroundStyle(.orange)
             }
             TextField("Ask model:", text: $settings.askModel, prompt: Text(Settings.defaultAskModel))
-            Text("Hold to ask about what's on your screen. A local vision model in Ollama reads a screenshot and answers in a bubble. Tap the key again, tap the voice key, or click ✕ to close.")
+            Stepper(value: $settings.askMemoryTurns, in: 0...20) {
+                Text(settings.askMemoryTurns == 0
+                     ? "Ask forgets each question (no follow-ups)"
+                     : "Ask remembers the last \(settings.askMemoryTurns) questions for follow-ups")
+            }
+            Text("Tap to ask out loud, double-tap to type, hold to talk while held. Your question shows in the Ask window and nothing is sent until you press Return or the send button. A local vision model in Ollama reads a screenshot and answers in a bubble; the voice key or ✕ closes it. Memory stays on this Mac and clears when LocalFlow quits.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -131,6 +136,9 @@ struct SettingsView: View {
         .padding(.vertical, 8)
         .onChange(of: settings.hotkey) { _, newValue in
             controller?.hotkeyChanged(to: newValue)
+        }
+        .onChange(of: settings.askMemoryTurns) { _, _ in
+            controller?.askMemoryLimitChanged()
         }
         .onChange(of: settings.askKey) { _, _ in
             controller?.askKeyChanged()
@@ -224,7 +232,7 @@ struct SetupView: View {
             permissionRow(
                 granted: screenOK,
                 title: "Screen Recording (for Ask)",
-                detail: "Lets Ask see your screen, only while you hold the Ask key. Optional.",
+                detail: "Lets Ask see your screen when you send it a question. Optional.",
                 action: { Permissions.requestScreenRecording() }
             )
 

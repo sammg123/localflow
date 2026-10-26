@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// Lets the ✕ and copy buttons work on the first click, without making the panel key.
-private final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
+/// Lets buttons work on the first click, without making the panel key first.
+final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 

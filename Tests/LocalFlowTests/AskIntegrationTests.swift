@@ -140,6 +140,65 @@ struct AskOnScreenTests {
         #expect(!panel.isVisible)
     }
 
+    @Test("– tucks the answer into the corner chip, the chip brings it back, and a covering window tucks it too")
+    func bubbleMinimizesAndExpands() async throws {
+        _ = NSApplication.shared
+        NSApp.setActivationPolicy(.accessory)
+        let screen = try #require(NSScreen.main)
+        let panel = AnswerPanel(closeHint: "Esc to close   ·   Right ⌥ to ask again")
+        var changes = 0
+        var closed = false
+        panel.onMinimizeChange = { changes += 1 }
+        panel.onClose = {
+            closed = true
+            panel.hide()
+        }
+
+        panel.show(on: screen)
+        panel.model.question = "What's the Nash equilibrium in this table?"
+        panel.model.answer = "Both players pick **Bottom/Right**: neither gains by switching alone."
+        panel.model.phase = .done
+        pump(0.6)
+        let frame = panel.frame
+
+        // – sits left of ✕: 18 pt padding, 22 pt buttons, 8 pt apart.
+        click(atAppKitPoint: NSPoint(x: frame.maxX - 18 - 22 - 8 - 11, y: frame.maxY - 18 - 11), on: screen)
+        pump(0.4)
+        let chip = panel.chipFrame
+        Self.snapshot(chip.insetBy(dx: -8, dy: -8), name: "live-chip")
+
+        #expect(panel.isMinimized)
+        #expect(panel.isVisible)
+        #expect(changes == 1)
+        #expect(chip.maxX == screen.visibleFrame.maxX - 20)
+
+        click(atAppKitPoint: NSPoint(x: chip.minX + 80, y: chip.midY), on: screen)
+        pump(0.6)
+
+        #expect(!panel.isMinimized)
+        #expect(changes == 2)
+
+        // Another window lands completely on top of it, like Terminal being clicked.
+        let cover = NSWindow(
+            contentRect: panel.frame.insetBy(dx: -40, dy: -40),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        cover.backgroundColor = .darkGray
+        cover.orderFrontRegardless()
+        pump(1.2)
+        cover.orderOut(nil)
+
+        #expect(panel.isMinimized)
+        #expect(changes == 3)
+
+        // The chip's own ✕ closes it for good.
+        click(atAppKitPoint: NSPoint(x: chip.maxX - 10 - 10, y: chip.midY), on: screen)
+        pump(0.3)
+
+        #expect(closed)
+        #expect(!panel.isVisible)
+    }
+
     @Test("the Ask window takes typing and edit shortcuts; Return sends and Esc cancels")
     func composerTakesTyping() async throws {
         _ = NSApplication.shared

@@ -160,6 +160,7 @@ struct AskTextTests {
 struct AskRenderTests {
     @Test("answer bubble renders in every phase", arguments: [
         AnswerPhase.looking,
+        .thinking,
         .answering,
         .done,
         .failed("Ollama isn't running. Start it, then ask again."),
@@ -230,6 +231,46 @@ struct AskRenderTests {
         #expect(model.canSend)
     }
 
+    @Test("the minimized chip renders in every phase", arguments: [
+        AnswerPhase.thinking, .answering, .done, .failed("Ollama isn't running."),
+    ])
+    func rendersChip(phase: AnswerPhase) throws {
+        let model = AnswerModel()
+        model.question = "What's the Nash equilibrium in this table, and which strategy dominates?"
+        model.phase = phase
+        let renderer = ImageRenderer(content: AnswerChipView(model: model))
+        renderer.scale = 2
+
+        let image = try #require(renderer.nsImage)
+
+        #expect(image.size == AnswerChipView.size)
+        try saveSnapshot(image, name: "chip-\(phase.snapshotName)")
+    }
+
+    @Test("the working label counts seconds once it's been a moment", arguments: [
+        (AnswerPhase.looking, 0.5, "Looking at your screen"),
+        (.thinking, 1.0, "Thinking"),
+        (.thinking, 4.2, "Thinking · 4s"),
+        (.thinking, 61.0, "Thinking · 61s"),
+    ])
+    func workingLabel(phase: AnswerPhase, elapsed: TimeInterval, expected: String) {
+        #expect(WorkingLabel.text(for: phase, elapsed: elapsed) == expected)
+    }
+
+    @Test("only another app's ordinary window over all of the bubble counts as covering it", arguments: [
+        ([window(x: 0, y: 0, w: 1000, h: 800)], true),
+        ([window(x: 150, y: 450, w: 300, h: 100)], false),               // partly over it
+        ([window(x: 0, y: 0, w: 1000, h: 800, layer: 25)], false),        // menu bar, lock screen, overlays
+        ([window(x: 0, y: 0, w: 1000, h: 800, alpha: 0)], false),         // invisible
+        ([], false),                                                      // screen locked or asleep
+    ])
+    func coveringWindows(windows: [[String: Any]], covered: Bool) {
+        // The bubble at 100,400 (top-left coordinates), 460 x 200.
+        let bubble = CGRect(x: 100, y: 400, width: 460, height: 200)
+
+        #expect(AnswerPanel.isCovered(bubble, by: windows) == covered)
+    }
+
     @Test("screen glow renders at the screen's size")
     func rendersGlow() throws {
         let size = CGSize(width: 1512, height: 982)
@@ -249,10 +290,20 @@ struct AskRenderTests {
     }
 }
 
+/// A window as CGWindowListCopyWindowInfo describes it.
+private func window(x: CGFloat, y: CGFloat, w: CGFloat, h: CGFloat, layer: Int = 0, alpha: Double = 1) -> [String: Any] {
+    [
+        kCGWindowLayer as String: layer,
+        kCGWindowAlpha as String: alpha,
+        kCGWindowBounds as String: CGRect(x: x, y: y, width: w, height: h).dictionaryRepresentation,
+    ]
+}
+
 private extension AnswerPhase {
     var snapshotName: String {
         switch self {
         case .looking: return "looking"
+        case .thinking: return "thinking"
         case .answering: return "answering"
         case .done: return "done"
         case .failed: return "failed"

@@ -5,8 +5,12 @@ import Foundation
 @MainActor
 protocol AnswerSurface: AnyObject {
     var model: AnswerModel { get }
+    /// Up in any form: the full bubble or the minimized chip.
     var isVisible: Bool { get }
+    var isMinimized: Bool { get }
     var onClose: (() -> Void)? { get set }
+    /// The user minimized or expanded it (the – button, the chip, or covering it).
+    var onMinimizeChange: (() -> Void)? { get set }
     func show(on screen: NSScreen?)
     func hide()
     func updateCloseHint(_ hint: String)
@@ -41,10 +45,12 @@ final class AskController {
     /// Bumped by Forget, so an answer still arriving when it's pressed isn't remembered.
     private var memoryEpoch = 0
 
-    /// An answer bubble went up (true) or came down (false).
-    var onActiveChange: ((Bool) -> Void)?
+    /// An answer went up, came down, minimized or expanded.
+    var onChange: (() -> Void)?
 
     private var screen: NSScreen?
+    /// The Ask window is open: the user is asking about this screen.
+    private var isComposing = false
     private var run: Task<Void, Never>?
     /// Bumped by every dismiss/submit so a cancelled run can never touch a newer bubble.
     private var generation = 0
@@ -62,6 +68,10 @@ final class AskController {
         captureScreen = capture
         answerPanel.updateCloseHint(closeHint)
         answerPanel.onClose = { [weak self] in self?.dismiss() }
+        answerPanel.onMinimizeChange = { [weak self] in
+            self?.updateOutline()
+            self?.onChange?()
+        }
     }
 
     static func captureDisplay(_ screen: NSScreen?) async throws -> Data {
@@ -69,8 +79,11 @@ final class AskController {
         return try await ScreenCapturer.capturePNG(of: screen)
     }
 
-    /// A bubble is up or an answer is on its way.
+    /// A bubble or chip is up, or an answer is on its way.
     var isActive: Bool { answerPanel.isVisible || run != nil }
+
+    /// The full bubble is up (not minimized): what Esc and Fn close.
+    var isExpanded: Bool { answerPanel.isVisible && !answerPanel.isMinimized }
 
     /// An answer is being worked on (capturing or streaming).
     var isRunning: Bool { run != nil }
@@ -99,32 +112,50 @@ final class AskController {
         let client = self.client
         let model = settings.effectiveAskModel
         Task.detached(priority: .utility) { await client.preload(model: model) }
-        glow.show(on: screen)
+        isComposing = true
+        updateOutline()
     }
 
     /// The Ask window closed without sending.
     func cancelPreparing() {
-        glow.hide()
+        isComposing = false
+        updateOutline()
+    }
+
+    /// The blue outline means "Ask is looking at this screen": while the question is
+    /// being written, then until the first word. Never over an answer, never minimized.
+    private func updateOutline() {
+        let phase = answerPanel.model.phase
+        let looking = run != nil && isExpanded && (phase == .looking || phase == .thinking)
+        if isComposing || looking {
+            glow.show(on: screen)
+        } else {
+            glow.hide()
+        }
     }
 
     /// Answer a question about the screen as it is right now.
     func submit(_ question: String) {
         let question = String(question.trimmingCharacters(in: .whitespacesAndNewlines)
             .prefix(AskLimits.maxQuestionLength))
+        isComposing = false
         guard !question.isEmpty else {
-            glow.hide()
+            updateOutline()
             return
         }
         generation += 1
         let current = generation
         answerPanel.show(on: screen)
         answerPanel.model.question = question
-        glow.show(on: screen)
-        onActiveChange?(true)
         run = Task { [weak self] in
             await self?.respond(question: question, generation: current)
-            if self?.generation == current { self?.run = nil }
+            if self?.generation == current {
+                self?.run = nil
+                self?.updateOutline()
+            }
         }
+        updateOutline()
+        onChange?()
     }
 
     func dismiss() {
@@ -132,9 +163,10 @@ final class AskController {
         generation += 1
         run?.cancel()
         run = nil
-        glow.hide()
+        isComposing = false
         answerPanel.hide()
-        if wasActive { onActiveChange?(false) }
+        updateOutline()
+        if wasActive { onChange?() }
     }
 
     private func respond(question: String, generation: Int) async {
@@ -144,8 +176,8 @@ final class AskController {
         let epoch = memoryEpoch
         func fail(_ message: String) {
             guard isCurrent() else { return }
-            glow.hide()
             model.phase = .failed(message)
+            updateOutline()
             SoundPlayer.playError()
         }
 
@@ -158,6 +190,7 @@ final class AskController {
             return
         }
         guard isCurrent() else { return }
+        model.phase = .thinking
 
         let limit = max(0, memoryLimit())
         let history = AskMemory.fitting(Array(turns.suffix(limit)), budget: AskLimits.historyBudget)
@@ -169,8 +202,8 @@ final class AskController {
                 guard isCurrent() else { return }
                 if firstToken == nil {
                     firstToken = started.duration(to: .now)
-                    glow.hide()
                     model.phase = .answering
+                    updateOutline()
                 }
                 model.answer += token
             }

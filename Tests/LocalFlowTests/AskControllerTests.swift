@@ -52,15 +52,33 @@ final class FakeTranscriber: Transcriber {
 final class FakeSurface: AnswerSurface {
     let model = AnswerModel()
     var onClose: (() -> Void)?
+    var onMinimizeChange: (() -> Void)?
     private(set) var isVisible = false
+    private(set) var isMinimized = false
     private(set) var closeHint = ""
 
     func show(on screen: NSScreen?) {
         model.reset()
         isVisible = true
+        isMinimized = false
     }
 
-    func hide() { isVisible = false }
+    func hide() {
+        isVisible = false
+        isMinimized = false
+    }
+
+    /// What the – button and the chip do in the real bubble.
+    func minimize() {
+        isMinimized = true
+        onMinimizeChange?()
+    }
+
+    func expand() {
+        isMinimized = false
+        onMinimizeChange?()
+    }
+
     func updateCloseHint(_ hint: String) { closeHint = hint }
 }
 
@@ -218,17 +236,93 @@ struct AskControllerTests {
         #expect(!controller.isActive)
     }
 
-    @Test("reports when an answer goes up and comes down, so Esc can close it")
-    func activeChanges() async {
+    @Test("reports when an answer goes up, tucks away, and comes down, so Esc knows")
+    func stateChanges() async {
         let controller = makeController()
-        var changes: [Bool] = []
-        controller.onActiveChange = { changes.append($0) }
+        var expanded: [Bool] = []
+        controller.onChange = { expanded.append(controller.isExpanded) }
 
         controller.submit("What is this?")
         await settle(controller)
+        surface.minimize()
+        surface.expand()
         controller.dismiss()
 
-        #expect(changes == [true, false])
+        #expect(expanded == [true, false, true, false])
+    }
+
+    @Test("a working animation shows from send until the first word")
+    func thinkingUntilFirstWord() async {
+        client.tokenDelay = .milliseconds(80)
+        let controller = makeController()
+
+        controller.submit("What is this?")
+        for _ in 0..<100 where surface.model.phase == .looking {
+            try? await Task.sleep(for: .milliseconds(2))
+        }
+
+        #expect(surface.model.phase == .thinking)
+        #expect(surface.model.answer.isEmpty)
+        await settle(controller)
+        #expect(surface.model.phase == .done)
+    }
+
+    @Test("minimized, the answer keeps coming, and it comes back whole")
+    func minimizeKeepsAnswering() async {
+        client.tokens = ["one ", "two ", "three"]
+        client.tokenDelay = .milliseconds(30)
+        let controller = makeController()
+
+        controller.submit("Count for me")
+        surface.minimize()
+        #expect(controller.isActive)
+        #expect(!controller.isExpanded)
+        await settle(controller)
+        surface.expand()
+
+        #expect(surface.model.answer == "one two three")
+        #expect(surface.model.phase == .done)
+        #expect(controller.isExpanded)
+    }
+
+    @Test("the blue outline is up only while Ask is looking: never minimized, never over the answer")
+    func outlineOnlyWhileLooking() async {
+        client.tokenDelay = .milliseconds(120)
+        let controller = makeController()
+
+        controller.prepare(on: nil)
+        #expect(indicator.isShowing)
+        controller.submit("What is this?")
+        for _ in 0..<100 where surface.model.phase != .thinking {
+            try? await Task.sleep(for: .milliseconds(2))
+        }
+        #expect(indicator.isShowing)
+        surface.minimize()
+        #expect(!indicator.isShowing)
+        surface.expand()
+        #expect(indicator.isShowing)
+        for _ in 0..<200 where surface.model.answer.isEmpty {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(!indicator.isShowing)
+        surface.minimize()
+        surface.expand()
+        #expect(!indicator.isShowing)
+        await settle(controller)
+        #expect(!indicator.isShowing)
+    }
+
+    @Test("closing from the chip closes it all")
+    func closeFromChip() async {
+        let controller = makeController()
+        controller.submit("What is this?")
+        await settle(controller)
+        surface.minimize()
+
+        surface.onClose?()
+
+        #expect(!surface.isVisible)
+        #expect(!controller.isActive)
     }
 
     @Test("the close hint reaches the bubble")

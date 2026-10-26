@@ -1,8 +1,10 @@
 import SwiftUI
 
 enum AnswerPhase: Equatable {
-    /// Question asked; the model is reading the screen (and loading, if cold).
+    /// Question sent; the screenshot is being taken.
     case looking
+    /// The model has the question and screenshot; no words yet (longer when it's cold).
+    case thinking
     /// Tokens are arriving.
     case answering
     case done
@@ -16,12 +18,52 @@ final class AnswerModel: ObservableObject {
     @Published var phase: AnswerPhase = .looking
     /// Natural height of the answer body, measured inside the scroll view.
     @Published var bodyHeight: CGFloat = 0
+    /// When the question was sent, for the "Thinking · 5s" counter.
+    private(set) var sentAt = Date()
+
+    var isWorking: Bool { phase == .looking || phase == .thinking || phase == .answering }
 
     func reset() {
         question = ""
         answer = ""
         phase = .looking
         bodyHeight = 0
+        sentAt = Date()
+    }
+}
+
+/// What the bubble says before the first word arrives.
+enum WorkingLabel {
+    /// A cold model can take 10+ seconds; counting shows it hasn't stalled.
+    static let countAfter: TimeInterval = 3
+
+    static func text(for phase: AnswerPhase, elapsed: TimeInterval) -> String {
+        let base = phase == .looking ? "Looking at your screen" : "Thinking"
+        guard elapsed >= countAfter else { return base }
+        return "\(base) · \(Int(elapsed))s"
+    }
+}
+
+/// Three blue dots that ripple while Ask is working. Still under Reduce Motion.
+struct ThinkingDots: View {
+    var size: CGFloat = 7
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.animation(paused: reduceMotion)) { timeline in
+            let time = timeline.date.timeIntervalSinceReferenceDate
+            HStack(spacing: size * 0.7) {
+                ForEach(0..<3, id: \.self) { index in
+                    let wave = reduceMotion ? 0.5 : (sin(time * 2 * .pi / 1.1 - Double(index) * 0.9) + 1) / 2
+                    Circle()
+                        .fill(AnswerView.askBlue)
+                        .frame(width: size, height: size)
+                        .scaleEffect(0.7 + 0.3 * wave)
+                        .opacity(0.35 + 0.65 * wave)
+                }
+            }
+        }
+        .accessibilityHidden(true)
     }
 }
 
@@ -33,6 +75,7 @@ struct AnswerView: View {
     /// False in render tests: ImageRenderer can't draw a ScrollView.
     var scrolls = true
     var onCopy: () -> Void = {}
+    var onMinimize: () -> Void = {}
     var onClose: () -> Void = {}
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -92,6 +135,7 @@ struct AnswerView: View {
                     }
                 }
             }
+            iconButton("minus", label: "Minimize", action: onMinimize)
             iconButton("xmark", label: "Close", action: onClose)
         }
     }
@@ -99,14 +143,19 @@ struct AnswerView: View {
     @ViewBuilder
     private var content: some View {
         switch model.phase {
-        case .looking:
-            HStack(spacing: 10) {
-                ProgressView().controlSize(.small).tint(Self.askBlue)
-                Text("Looking at your screen…")
-                    .font(.system(size: 15))
-                    .foregroundStyle(Self.secondary)
+        case .looking, .thinking:
+            HStack(spacing: 12) {
+                ThinkingDots()
+                TimelineView(.periodic(from: model.sentAt, by: 1)) { timeline in
+                    Text(WorkingLabel.text(for: model.phase, elapsed: timeline.date.timeIntervalSince(model.sentAt)))
+                        .font(.system(size: 15))
+                        .foregroundStyle(Self.secondary)
+                        .monospacedDigit()
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Working on your answer")
         case .answering, .done:
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(Array(AnswerFormatter.segments(model.answer).enumerated()), id: \.offset) { _, segment in

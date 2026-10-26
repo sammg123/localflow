@@ -116,7 +116,7 @@ final class AppController {
         )
         // Esc closes the Ask window or the answer, from any app, while one is up.
         askSession.onPhaseChange = { [weak self] _ in self?.updateAskEscape() }
-        ask.onActiveChange = { [weak self] _ in self?.updateAskEscape() }
+        ask.onChange = { [weak self] in self?.updateAskEscape() }
 
         recorder.levelHandler = { [weak self] level in
             DispatchQueue.main.async {
@@ -244,8 +244,9 @@ final class AppController {
         controlPressWithoutRecording = false
         // The Ask window has the keyboard and sits where the dictation pill would.
         guard !askSession.phase.isOpen else { return }
-        // The voice key also closes an answer (and cancels one on its way).
-        if ask.isActive { ask.dismiss() }
+        // The voice key also closes an open answer (and cancels one on its way). A
+        // minimized one is being kept on purpose.
+        if ask.isExpanded { ask.dismiss() }
         switch state {
         case .idle, .processing:
             if command, !llmPolisher.isAvailable {
@@ -377,14 +378,15 @@ final class AppController {
     }
 
     private func updateAskEscape() {
-        askHotkeyMonitor?.escapeEnabled = askSession.phase.isOpen || ask.isActive
+        // A minimized answer stays put: Esc in another app (Claude Code's interrupt) mustn't close it.
+        askHotkeyMonitor?.escapeEnabled = askSession.phase.isOpen || ask.isExpanded
     }
 
     /// Esc: the Ask window first if it's open, otherwise the answer.
     private func askEscape() {
         if askSession.phase.isOpen {
             askSession.cancel()
-        } else {
+        } else if ask.isExpanded {
             ask.dismiss()
         }
     }

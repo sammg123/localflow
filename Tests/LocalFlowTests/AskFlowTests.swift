@@ -194,6 +194,24 @@ struct AskFlowTests {
         #expect(result.effects == [.finishMic])
     }
 
+    @Test("Esc closes; Shift+Esc tucks the answer away and brings it back", arguments: [
+        (false, true, AnswerPresence.none, AskEscape.cancelWindow),
+        (true, true, .none, .cancelWindow),
+        (false, false, .open, .close),
+        (true, false, .open, .minimize),
+        (true, false, .tucked, .expand),
+        (false, false, .none, nil),
+        (true, false, .none, nil),
+    ] as [(Bool, Bool, AnswerPresence, AskEscape?)])
+    func escape(shift: Bool, windowOpen: Bool, answer: AnswerPresence, expected: AskEscape?) {
+        #expect(AskEscape.action(shift: shift, windowOpen: windowOpen, answer: answer) == expected)
+    }
+
+    @Test("plain Esc leaves a tucked-away answer alone, so Esc in another app can't close it")
+    func escapeLeavesTuckedAnswer() {
+        #expect(AskEscape.action(shift: false, windowOpen: false, answer: .tucked) == nil)
+    }
+
     @Test("losing the mic keeps what was typed")
     func micLost() {
         let result = run([.micLost], from: .listening(since: 100))

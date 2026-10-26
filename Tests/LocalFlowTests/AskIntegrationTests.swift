@@ -106,7 +106,7 @@ struct AskOnScreenTests {
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.accessory)
         let screen = try #require(NSScreen.main)
-        let panel = AnswerPanel(closeHint: "Esc to close   ·   Right ⌥ to ask again")
+        let panel = AnswerPanel(closeHint: "Esc to close   ·   ⇧Esc to minimize   ·   Right ⌥ to ask again")
         var closed = false
         panel.onClose = {
             closed = true
@@ -145,7 +145,7 @@ struct AskOnScreenTests {
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.accessory)
         let screen = try #require(NSScreen.main)
-        let panel = AnswerPanel(closeHint: "Esc to close   ·   Right ⌥ to ask again")
+        let panel = AnswerPanel(closeHint: "Esc to close   ·   ⇧Esc to minimize   ·   Right ⌥ to ask again")
         var changes = 0
         var closed = false
         panel.onMinimizeChange = { changes += 1 }
@@ -251,6 +251,26 @@ struct AskOnScreenTests {
             event?.postToPid(getpid())
         }
         pump(0.05)
+    }
+
+    @Test("the Ask key's monitor tells Shift+Esc from Esc")
+    func shiftEscapeReachesAsk() async throws {
+        _ = NSApplication.shared
+        NSApp.setActivationPolicy(.accessory)
+        let monitor = HotkeyMonitor(choice: .rightOption)
+        var pressed: [String] = []
+        monitor.onEscape = { pressed.append("esc") }
+        monitor.onShiftEscape = { pressed.append("shift-esc") }
+        monitor.escapeEnabled = true
+        monitor.startMonitoring()
+        defer { monitor.stopMonitoring() }
+        pump(0.2)
+
+        pressKeyInSelf(UInt16(kVK_Escape), flags: .maskShift)
+        pressKeyInSelf(UInt16(kVK_Escape))
+        pump(0.2)
+
+        #expect(pressed == ["shift-esc", "esc"])
     }
 
     @Test("outline covers the whole display")

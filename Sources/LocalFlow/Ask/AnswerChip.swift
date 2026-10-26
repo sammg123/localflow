@@ -30,7 +30,7 @@ struct AnswerChipView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Show answer")
             .accessibilityValue(statusLabel)
-            .help("Show answer")
+            .help("Show answer (⇧Esc)")
 
             Button(action: onClose) {
                 Image(systemName: "xmark")

@@ -30,6 +30,8 @@ final class HotkeyMonitor {
     var onPressEnded: ((_ heldDuration: TimeInterval) -> Void)?
     var onDoubleTap: (() -> Void)?
     var onEscape: (() -> Void)?
+    /// Shift+Esc, when set; otherwise Shift+Esc counts as Esc.
+    var onShiftEscape: (() -> Void)?
     /// Another key went down while ours is held: the press was part of a shortcut
     /// (Option+letter for a special character), not a hold on its own.
     var onKeyDownWhileHeld: (() -> Void)?
@@ -86,7 +88,7 @@ final class HotkeyMonitor {
         monitors.append(NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.noteKeyDownWhileHeld(event)
             if self?.escapeEnabled == true, event.keyCode == UInt16(kVK_Escape) {
-                self?.onEscape?()
+                self?.fireEscape(event)
                 return nil
             }
             return event
@@ -104,7 +106,15 @@ final class HotkeyMonitor {
     private func handleKeyDown(_ event: NSEvent) {
         noteKeyDownWhileHeld(event)
         guard escapeEnabled, event.keyCode == UInt16(kVK_Escape) else { return }
-        onEscape?()
+        fireEscape(event)
+    }
+
+    private func fireEscape(_ event: NSEvent) {
+        if event.modifierFlags.contains(.shift), let onShiftEscape {
+            onShiftEscape()
+        } else {
+            onEscape?()
+        }
     }
 
     private func noteKeyDownWhileHeld(_ event: NSEvent) {

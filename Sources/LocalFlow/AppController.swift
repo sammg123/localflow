@@ -374,20 +374,22 @@ final class AppController {
     }
 
     private var askCloseHint: String {
-        "Esc to close   ·   \(askKeyName) to ask again"
+        "Esc to close   ·   ⇧Esc to minimize   ·   \(askKeyName) to ask again"
     }
 
     private func updateAskEscape() {
-        // A minimized answer stays put: Esc in another app (Claude Code's interrupt) mustn't close it.
-        askHotkeyMonitor?.escapeEnabled = askSession.phase.isOpen || ask.isExpanded
+        // Live while the chip is up too, for Shift+Esc; plain Esc leaves the chip alone.
+        askHotkeyMonitor?.escapeEnabled = askSession.phase.isOpen || ask.presence != .none
     }
 
-    /// Esc: the Ask window first if it's open, otherwise the answer.
-    private func askEscape() {
-        if askSession.phase.isOpen {
-            askSession.cancel()
-        } else if ask.isExpanded {
-            ask.dismiss()
+    /// Esc closes the Ask window or the answer; Shift+Esc tucks the answer away and back.
+    private func askEscape(shift: Bool) {
+        switch AskEscape.action(shift: shift, windowOpen: askSession.phase.isOpen, answer: ask.presence) {
+        case .cancelWindow: askSession.cancel()
+        case .close: ask.dismiss()
+        case .minimize: ask.minimize()
+        case .expand: ask.expand()
+        case nil: break
         }
     }
 
@@ -406,7 +408,8 @@ final class AppController {
         // The monitor reports a second quick tap as a double-tap; Ask times its own.
         monitor.onDoubleTap = { [weak self] in self?.askSession.keyUp(held: 0, at: now()) }
         monitor.onKeyDownWhileHeld = { [weak self] in self?.askSession.otherKey() }
-        monitor.onEscape = { [weak self] in self?.askEscape() }
+        monitor.onEscape = { [weak self] in self?.askEscape(shift: false) }
+        monitor.onShiftEscape = { [weak self] in self?.askEscape(shift: true) }
         monitor.startMonitoring()
         askHotkeyMonitor = monitor
         updateAskEscape()

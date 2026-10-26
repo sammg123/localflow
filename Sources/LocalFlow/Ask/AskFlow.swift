@@ -147,6 +147,34 @@ enum AskFlow {
     }
 }
 
+/// Whether an answer is up, and in which form.
+enum AnswerPresence: Equatable {
+    case none
+    /// The full bubble.
+    case open
+    /// Minimized to the corner chip.
+    case tucked
+}
+
+/// What Esc does to Ask: plain Esc closes, Shift+Esc tucks the answer away and brings
+/// it back. Plain Esc leaves a tucked answer alone, since Esc means other things in
+/// whatever app is in front (Claude Code's interrupt, for one).
+enum AskEscape: Equatable {
+    case cancelWindow
+    case close
+    case minimize
+    case expand
+
+    static func action(shift: Bool, windowOpen: Bool, answer: AnswerPresence) -> AskEscape? {
+        if windowOpen { return .cancelWindow }
+        switch answer {
+        case .open: return shift ? .minimize : .close
+        case .tucked: return shift ? .expand : nil
+        case .none: return nil
+        }
+    }
+}
+
 enum AskLimits {
     /// Longest question sent to the model; a bigger paste is cut here.
     static let maxQuestionLength = 4_000

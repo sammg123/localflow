@@ -135,7 +135,7 @@ struct AnswerView: View {
                     }
                 }
             }
-            iconButton("minus", label: "Minimize", action: onMinimize)
+            iconButton("minus", label: "Minimize", help: "Minimize (⇧Esc)", action: onMinimize)
             iconButton("xmark", label: "Close", action: onClose)
         }
     }
@@ -199,7 +199,7 @@ struct AnswerView: View {
         }
     }
 
-    private func iconButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
+    private func iconButton(_ symbol: String, label: String, help: String? = nil, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 10, weight: .bold))
@@ -210,7 +210,7 @@ struct AnswerView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
-        .help(label)
+        .help(help ?? label)
     }
 
     /// **bold**, *italic* and `code` from the model; anything else shows as typed.

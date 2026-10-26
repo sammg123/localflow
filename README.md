@@ -34,7 +34,7 @@ release ──► rule cleanup (fillers, replacements, spoken commands)
 | Hold **Right ⌥** | Talk while held; the words land in the Ask window |
 | Return or the send button | Send the question (nothing is sent before this). Shift+Return = new line, Esc = cancel |
 | Esc, Fn, or click ✕ | Close the answer (also cancels one still coming). Right ⌥ closes it and starts a new question |
-| Click **–** on the answer | Tuck it into a chip in the bottom-right corner (the answer keeps coming). Click the chip to bring it back, or its ✕ to close. Esc and Fn leave a tucked answer alone |
+| **Shift+Esc**, or click **–** on the answer | Tuck it into a chip in the bottom-right corner (the answer keeps coming). Shift+Esc again or a click on the chip brings it back; the chip's ✕ closes it. Esc and Fn leave a tucked answer alone |
 
 Command mode needs Apple Intelligence enabled (it's the edit engine) and isn't available when the main hotkey is ⌃⌥.
 

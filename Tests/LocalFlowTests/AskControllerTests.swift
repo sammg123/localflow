@@ -312,6 +312,24 @@ struct AskControllerTests {
         #expect(!indicator.isShowing)
     }
 
+    @Test("Shift+Esc tucks the answer away and brings it back, and says where it is")
+    func minimizeAndExpandByKey() async {
+        let controller = makeController()
+        #expect(controller.presence == .none)
+        controller.submit("What is this?")
+        await settle(controller)
+        #expect(controller.presence == .open)
+
+        controller.minimize()
+        #expect(controller.presence == .tucked)
+        #expect(surface.isVisible)
+
+        controller.expand()
+        #expect(controller.presence == .open)
+        controller.dismiss()
+        #expect(controller.presence == .none)
+    }
+
     @Test("closing from the chip closes it all")
     func closeFromChip() async {
         let controller = makeController()

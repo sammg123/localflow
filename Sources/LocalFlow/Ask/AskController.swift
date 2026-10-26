@@ -13,6 +13,8 @@ protocol AnswerSurface: AnyObject {
     var onMinimizeChange: (() -> Void)? { get set }
     func show(on screen: NSScreen?)
     func hide()
+    func minimize()
+    func expand()
     func updateCloseHint(_ hint: String)
 }
 
@@ -84,6 +86,17 @@ final class AskController {
 
     /// The full bubble is up (not minimized): what Esc and Fn close.
     var isExpanded: Bool { answerPanel.isVisible && !answerPanel.isMinimized }
+
+    var presence: AnswerPresence {
+        guard answerPanel.isVisible else { return .none }
+        return answerPanel.isMinimized ? .tucked : .open
+    }
+
+    /// Shift+Esc: tuck the answer into the corner chip (it keeps coming).
+    func minimize() { answerPanel.minimize() }
+
+    /// Shift+Esc on the chip: bring the answer back.
+    func expand() { answerPanel.expand() }
 
     /// An answer is being worked on (capturing or streaming).
     var isRunning: Bool { run != nil }

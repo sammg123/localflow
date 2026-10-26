@@ -106,7 +106,7 @@ struct AskOnScreenTests {
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.accessory)
         let screen = try #require(NSScreen.main)
-        let panel = AnswerPanel(closeHint: "Tap Right ⌥ or Fn to close")
+        let panel = AnswerPanel(closeHint: "Esc to close   ·   Right ⌥ to ask again")
         var closed = false
         panel.onClose = {
             closed = true

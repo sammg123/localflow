@@ -41,6 +41,9 @@ final class AskController {
     /// Bumped by Forget, so an answer still arriving when it's pressed isn't remembered.
     private var memoryEpoch = 0
 
+    /// An answer bubble went up (true) or came down (false).
+    var onActiveChange: ((Bool) -> Void)?
+
     private var screen: NSScreen?
     private var run: Task<Void, Never>?
     /// Bumped by every dismiss/submit so a cancelled run can never touch a newer bubble.
@@ -117,6 +120,7 @@ final class AskController {
         answerPanel.show(on: screen)
         answerPanel.model.question = question
         glow.show(on: screen)
+        onActiveChange?(true)
         run = Task { [weak self] in
             await self?.respond(question: question, generation: current)
             if self?.generation == current { self?.run = nil }
@@ -124,11 +128,13 @@ final class AskController {
     }
 
     func dismiss() {
+        let wasActive = isActive
         generation += 1
         run?.cancel()
         run = nil
         glow.hide()
         answerPanel.hide()
+        if wasActive { onActiveChange?(false) }
     }
 
     private func respond(question: String, generation: Int) async {

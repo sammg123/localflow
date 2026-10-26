@@ -114,10 +114,9 @@ final class AppController {
             canOpen: { [weak self] in self?.askCanOpen() ?? false },
             swallowPress: { [weak self] in self?.askHotkeyMonitor?.swallowCurrentPress() }
         )
-        // Esc closes the Ask window from any app while it's open.
-        askSession.onPhaseChange = { [weak self] phase in
-            self?.askHotkeyMonitor?.escapeEnabled = phase.isOpen
-        }
+        // Esc closes the Ask window or the answer, from any app, while one is up.
+        askSession.onPhaseChange = { [weak self] _ in self?.updateAskEscape() }
+        ask.onActiveChange = { [weak self] _ in self?.updateAskEscape() }
 
         recorder.levelHandler = { [weak self] level in
             DispatchQueue.main.async {
@@ -374,7 +373,20 @@ final class AppController {
     }
 
     private var askCloseHint: String {
-        "\(askKeyName) to ask again   ·   \(settings.hotkey.shortName ?? "⌃⌥") to close"
+        "Esc to close   ·   \(askKeyName) to ask again"
+    }
+
+    private func updateAskEscape() {
+        askHotkeyMonitor?.escapeEnabled = askSession.phase.isOpen || ask.isActive
+    }
+
+    /// Esc: the Ask window first if it's open, otherwise the answer.
+    private func askEscape() {
+        if askSession.phase.isOpen {
+            askSession.cancel()
+        } else {
+            ask.dismiss()
+        }
     }
 
     private func configureAskHotkey() {
@@ -392,9 +404,10 @@ final class AppController {
         // The monitor reports a second quick tap as a double-tap; Ask times its own.
         monitor.onDoubleTap = { [weak self] in self?.askSession.keyUp(held: 0, at: now()) }
         monitor.onKeyDownWhileHeld = { [weak self] in self?.askSession.otherKey() }
-        monitor.onEscape = { [weak self] in self?.askSession.cancel() }
+        monitor.onEscape = { [weak self] in self?.askEscape() }
         monitor.startMonitoring()
         askHotkeyMonitor = monitor
+        updateAskEscape()
     }
 
     /// Checked before the Ask window first appears: it can't see the screen without this.

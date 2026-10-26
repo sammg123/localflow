@@ -33,7 +33,7 @@ release ──► rule cleanup (fillers, replacements, spoken commands)
 | Double-tap **Right ⌥** | Ask window opens for typing (mic off). Tap Right ⌥ to add speech |
 | Hold **Right ⌥** | Talk while held; the words land in the Ask window |
 | Return or the send button | Send the question (nothing is sent before this). Shift+Return = new line, Esc = cancel |
-| Fn, or click ✕ | Close the answer (also cancels one still coming). Right ⌥ closes it and starts a new question |
+| Esc, Fn, or click ✕ | Close the answer (also cancels one still coming). Right ⌥ closes it and starts a new question |
 
 Command mode needs Apple Intelligence enabled (it's the edit engine) and isn't available when the main hotkey is ⌃⌥.
 

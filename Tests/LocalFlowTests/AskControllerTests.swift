@@ -218,6 +218,19 @@ struct AskControllerTests {
         #expect(!controller.isActive)
     }
 
+    @Test("reports when an answer goes up and comes down, so Esc can close it")
+    func activeChanges() async {
+        let controller = makeController()
+        var changes: [Bool] = []
+        controller.onActiveChange = { changes.append($0) }
+
+        controller.submit("What is this?")
+        await settle(controller)
+        controller.dismiss()
+
+        #expect(changes == [true, false])
+    }
+
     @Test("the close hint reaches the bubble")
     func closeHint() {
         let controller = makeController()

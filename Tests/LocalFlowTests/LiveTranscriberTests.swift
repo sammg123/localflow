@@ -88,6 +88,11 @@ struct LiveTranscriberTests {
                             onText: { _ in })
 
         live.start()
+        // Wait for the first pass (slow under a loaded test run), then give it ten more
+        // ticks in which it must not transcribe the same audio again.
+        for _ in 0..<200 where calls == 0 {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
         try? await Task.sleep(for: .milliseconds(100))
         live.stop()
 

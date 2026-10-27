@@ -156,9 +156,10 @@ enum AnswerPresence: Equatable {
     case tucked
 }
 
-/// What Esc does to Ask: plain Esc closes, Shift+Esc tucks the answer away and brings
-/// it back. Plain Esc leaves a tucked answer alone, since Esc means other things in
-/// whatever app is in front (Claude Code's interrupt, for one).
+/// What Esc does to Ask: plain Esc tucks the answer away and brings it back, Shift+Esc
+/// closes it. Esc also reaches whatever app is in front (Claude Code's interrupt, for
+/// one), so plain Esc never throws an answer away; an Esc meant for that app does
+/// toggle the answer, though, bringing a tucked one back.
 enum AskEscape: Equatable {
     case cancelWindow
     case close
@@ -168,8 +169,8 @@ enum AskEscape: Equatable {
     static func action(shift: Bool, windowOpen: Bool, answer: AnswerPresence) -> AskEscape? {
         if windowOpen { return .cancelWindow }
         switch answer {
-        case .open: return shift ? .minimize : .close
-        case .tucked: return shift ? .expand : nil
+        case .open: return shift ? .close : .minimize
+        case .tucked: return shift ? .close : .expand
         case .none: return nil
         }
     }

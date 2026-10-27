@@ -15,10 +15,12 @@ private final class AnswerWindow: NSPanel {
     }
 }
 
-/// The answer bubble, where the pill appears. An ordinary window level, so any app you
-/// click comes in front of it; non-activating, so clicking it never takes focus from
-/// the app being worked in. Minimizes to a chip in the corner (the – button, or by
-/// itself once another window covers it completely) and expands back from the chip.
+/// The answer bubble, where the pill appears. It opens floating over everything, so the
+/// app being worked in can't come back in front of it before it's seen; the first click
+/// anywhere else drops it to an ordinary window, so that app (and any app clicked after)
+/// comes in front. Non-activating, so clicking it never takes focus from the app being
+/// worked in. Minimizes to a chip in the corner (the – button, Esc, or by itself once
+/// another window covers it completely) and expands back from the chip.
 @MainActor
 final class AnswerPanel {
     static let width: CGFloat = 460
@@ -38,6 +40,8 @@ final class AnswerPanel {
     private var shownAt = Date.distantPast
     private var settleCheck: Task<Void, Never>?
     private var observers: [NSObjectProtocol] = []
+    /// Waiting for the first click outside the bubble, while it floats.
+    private var clickWatchers: [Any] = []
 
     private(set) var isMinimized = false
     /// Up in any form: the full bubble or the chip.
@@ -95,6 +99,7 @@ final class AnswerPanel {
 
     func hide() {
         settleCheck?.cancel()
+        stopWatchingClicks()
         isMinimized = false
         chip.hide()
         guard panel.isVisible else { return }
@@ -104,6 +109,7 @@ final class AnswerPanel {
     func minimize() {
         guard panel.isVisible, !isMinimized else { return }
         settleCheck?.cancel()
+        stopWatchingClicks()
         isMinimized = true
         panel.orderOut(nil)
         chip.show(on: screen)
@@ -123,7 +129,9 @@ final class AnswerPanel {
         pinToBottom()
         shownAt = Date()
         panel.alphaValue = 0
+        panel.level = .floating
         panel.orderFrontRegardless()
+        watchForClickElsewhere()
         NSAnimationContext.runAnimationGroup { context in
             context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.18
             panel.animator().alphaValue = 1
@@ -140,6 +148,61 @@ final class AnswerPanel {
         observers.append(center.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: panel, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.checkCovered() }
         })
+        observers.append(NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            let pid = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.processIdentifier
+            MainActor.assumeIsolated { self?.otherAppActivated(pid) }
+        })
+    }
+
+    /// Clicks in other apps (global) and in LocalFlow's other windows (local).
+    private func watchForClickElsewhere() {
+        guard clickWatchers.isEmpty else { return }
+        let clicks: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: clicks, handler: { [weak self] event in
+            let underClick = event.cgEvent?.getIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent) ?? 0
+            MainActor.assumeIsolated {
+                self?.stepBack(behind: underClick > 0 ? Int(underClick)
+                    : NSWindow.windowNumber(at: NSEvent.mouseLocation, belowWindowWithWindowNumber: 0))
+            }
+        }) {
+            clickWatchers.append(global)
+        }
+        if let local = NSEvent.addLocalMonitorForEvents(matching: clicks, handler: { [weak self] event in
+            MainActor.assumeIsolated {
+                if let self, event.window !== self.panel { self.stepBack(behind: event.windowNumber) }
+            }
+            return event
+        }) {
+            clickWatchers.append(local)
+        }
+    }
+
+    private func stopWatchingClicks() {
+        clickWatchers.forEach(NSEvent.removeMonitor)
+        clickWatchers = []
+    }
+
+    /// Becomes an ordinary window behind the clicked one, so that app comes in front
+    /// however its own click and this one race.
+    private func stepBack(behind clicked: Int) {
+        stopWatchingClicks()
+        panel.level = .normal
+        guard let id = CGWindowID(exactly: clicked),
+              let windows = CGWindowListCopyWindowInfo(.optionIncludingWindow, id) as? [[String: Any]],
+              let number = Self.windowToGoBehind(clicked, among: windows) else { return }
+        panel.order(.below, relativeTo: number)
+    }
+
+    /// Switching apps without a click (Cmd-Tab) counts as clicking that app. The app being
+    /// worked in taking the keyboard back as the Ask window closes doesn't.
+    private func otherAppActivated(_ pid: pid_t?) {
+        guard let pid, pid != ProcessInfo.processInfo.processIdentifier, !clickWatchers.isEmpty,
+              Date().timeIntervalSince(shownAt) >= Self.settleTime else { return }
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+            as? [[String: Any]] ?? []
+        stepBack(behind: Self.frontWindow(of: pid, among: windows) ?? 0)
     }
 
     /// Completely covered by another window: tuck into the chip so it's one click away
@@ -183,6 +246,25 @@ final class AnswerPanel {
                   let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { return false }
             return rect.contains(bubble)
         }
+    }
+
+    /// The clicked window, when it's an ordinary app window (as CGWindowListCopyWindowInfo
+    /// lists them) the bubble can go behind. The desktop, Dock and menu bar don't count.
+    static func windowToGoBehind(_ number: Int, among windows: [[String: Any]]) -> Int? {
+        guard number > 0 else { return nil }
+        let isOrdinary = windows.contains { info in
+            (info[kCGWindowNumber as String] as? Int) == number && (info[kCGWindowLayer as String] as? Int) == 0
+        }
+        return isOrdinary ? number : nil
+    }
+
+    /// An app's frontmost ordinary window, from CGWindowListCopyWindowInfo's
+    /// front-to-back list.
+    static func frontWindow(of pid: pid_t, among windows: [[String: Any]]) -> Int? {
+        let front = windows.first { info in
+            (info[kCGWindowOwnerPID as String] as? Int) == Int(pid) && (info[kCGWindowLayer as String] as? Int) == 0
+        }
+        return front?[kCGWindowNumber as String] as? Int
     }
 
     /// Bottom edge where the pill sits, horizontally centered on the working display.

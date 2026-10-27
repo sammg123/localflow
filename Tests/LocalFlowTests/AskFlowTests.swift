@@ -194,12 +194,13 @@ struct AskFlowTests {
         #expect(result.effects == [.finishMic])
     }
 
-    @Test("Esc closes; Shift+Esc tucks the answer away and brings it back", arguments: [
+    @Test("Esc tucks the answer away and brings it back; Shift+Esc closes it", arguments: [
         (false, true, AnswerPresence.none, AskEscape.cancelWindow),
         (true, true, .none, .cancelWindow),
-        (false, false, .open, .close),
-        (true, false, .open, .minimize),
-        (true, false, .tucked, .expand),
+        (false, false, .open, .minimize),
+        (false, false, .tucked, .expand),
+        (true, false, .open, .close),
+        (true, false, .tucked, .close),
         (false, false, .none, nil),
         (true, false, .none, nil),
     ] as [(Bool, Bool, AnswerPresence, AskEscape?)])
@@ -207,9 +208,11 @@ struct AskFlowTests {
         #expect(AskEscape.action(shift: shift, windowOpen: windowOpen, answer: answer) == expected)
     }
 
-    @Test("plain Esc leaves a tucked-away answer alone, so Esc in another app can't close it")
-    func escapeLeavesTuckedAnswer() {
-        #expect(AskEscape.action(shift: false, windowOpen: false, answer: .tucked) == nil)
+    @Test("plain Esc never throws an answer away, so Esc meant for another app costs nothing")
+    func plainEscapeKeepsTheAnswer() {
+        let actions = [AnswerPresence.open, .tucked].map { AskEscape.action(shift: false, windowOpen: false, answer: $0) }
+
+        #expect(!actions.contains(.close))
     }
 
     @Test("losing the mic keeps what was typed")

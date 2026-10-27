@@ -312,7 +312,7 @@ struct AskControllerTests {
         #expect(!indicator.isShowing)
     }
 
-    @Test("Shift+Esc tucks the answer away and brings it back, and says where it is")
+    @Test("Esc tucks the answer away and brings it back, and says where it is")
     func minimizeAndExpandByKey() async {
         let controller = makeController()
         #expect(controller.presence == .none)

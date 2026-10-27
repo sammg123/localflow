@@ -106,7 +106,7 @@ struct AskOnScreenTests {
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.accessory)
         let screen = try #require(NSScreen.main)
-        let panel = AnswerPanel(closeHint: "Esc to close   ·   ⇧Esc to minimize   ·   Right ⌥ to ask again")
+        let panel = AnswerPanel(closeHint: "Esc to minimize   ·   ⇧Esc to close   ·   Right ⌥ to ask again")
         var closed = false
         panel.onClose = {
             closed = true
@@ -117,6 +117,7 @@ struct AskOnScreenTests {
         panel.model.question = "What's on my screen?"
         pump(0.4)
         let lookingHeight = panel.frame.height
+        Self.snapshot(panel.frame, name: "live-looking")
         panel.model.phase = .answering
         for word in "A Brightspace slide on **equilibrium in dominant strategies**, page 35 of 100. It says each player does best regardless of what the other does.".split(separator: " ") {
             panel.model.answer += word + " "
@@ -140,12 +141,13 @@ struct AskOnScreenTests {
         #expect(!panel.isVisible)
     }
 
-    @Test("– tucks the answer into the corner chip, the chip brings it back, and a covering window tucks it too")
+    @Test("– tucks the answer into the corner chip, the chip brings it back, and another app stays under it until clicked")
     func bubbleMinimizesAndExpands() async throws {
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.accessory)
         let screen = try #require(NSScreen.main)
-        let panel = AnswerPanel(closeHint: "Esc to close   ·   ⇧Esc to minimize   ·   Right ⌥ to ask again")
+        let otherApp = try OtherAppWindow.build()
+        let panel = AnswerPanel(closeHint: "Esc to minimize   ·   ⇧Esc to close   ·   Right ⌥ to ask again")
         var changes = 0
         var closed = false
         panel.onMinimizeChange = { changes += 1 }
@@ -178,18 +180,38 @@ struct AskOnScreenTests {
         #expect(!panel.isMinimized)
         #expect(changes == 2)
 
-        // Another window lands completely on top of it, like Terminal being clicked.
-        let cover = NSWindow(
-            contentRect: panel.frame.insetBy(dx: -40, dy: -40),
-            styleMask: [.borderless], backing: .buffered, defer: false
-        )
-        cover.backgroundColor = .darkGray
-        cover.orderFrontRegardless()
+        // Another app's window comes in front over all of it without switching apps, the
+        // way Terminal's does when it takes the keyboard back as the Ask window closes.
+        // The answer stays on top...
+        let expanded = panel.frame
+        let cover = try OtherAppWindow(binary: otherApp, covering: expanded.insetBy(dx: -40, dy: -40))
+        defer { cover.close() }
         pump(1.2)
-        cover.orderOut(nil)
+
+        #expect(!panel.isMinimized)
+        #expect(changes == 2)
+
+        // ...until that app is clicked: then it goes behind, and being covered completely
+        // tucks it into the chip.
+        click(atAppKitPoint: NSPoint(x: expanded.minX - 20, y: expanded.midY), on: screen)
+        pump(1.2)
+        cover.close()
 
         #expect(panel.isMinimized)
         #expect(changes == 3)
+
+        // Switching to another app without a click (Cmd-Tab) counts as clicking it.
+        click(atAppKitPoint: NSPoint(x: chip.minX + 80, y: chip.midY), on: screen)
+        pump(0.6)
+        #expect(!panel.isMinimized)
+        let switched = try OtherAppWindow(binary: otherApp, covering: panel.frame.insetBy(dx: -40, dy: -40),
+                                          activates: true)
+        defer { switched.close() }
+        pump(1.2)
+        switched.close()
+
+        #expect(panel.isMinimized)
+        #expect(changes == 5)
 
         // The chip's own ✕ closes it for good.
         click(atAppKitPoint: NSPoint(x: chip.maxX - 10 - 10, y: chip.midY), on: screen)
@@ -320,4 +342,70 @@ struct AskOnScreenTests {
         try? capture.run()
         capture.waitUntilExit()
     }
+}
+
+/// A window owned by another process, standing in for Terminal: it comes in front over
+/// the bubble, and can switch to itself like Cmd-Tab. It never touches any other app.
+@MainActor
+private final class OtherAppWindow {
+    struct BuildFailed: Error {}
+
+    private let process = Process()
+
+    /// Compiled once per test, before anything is on screen.
+    static func build() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("localflow-other-app-\(UUID())")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let source = dir.appendingPathComponent("main.swift")
+        let binary = dir.appendingPathComponent("other-app")
+        try Self.source.write(to: source, atomically: true, encoding: .utf8)
+        let compile = Process()
+        compile.executableURL = URL(fileURLWithPath: "/usr/bin/swiftc")
+        compile.arguments = [source.path, "-o", binary.path]
+        try compile.run()
+        compile.waitUntilExit()
+        guard compile.terminationStatus == 0 else { throw BuildFailed() }
+        return binary
+    }
+
+    /// Returns once the window is up and in front; `activates` also switches to it.
+    init(binary: URL, covering rect: NSRect, activates: Bool = false) throws {
+        let output = Pipe()
+        process.executableURL = binary
+        process.arguments = [rect.minX, rect.minY, rect.width, rect.height].map { "\($0)" } + (activates ? ["activate"] : [])
+        process.standardOutput = output
+        try process.run()
+        _ = output.fileHandleForReading.availableData
+    }
+
+    func close() {
+        guard process.isRunning else { return }
+        process.terminate()
+        process.waitUntilExit()
+    }
+
+    private static let source = """
+    import AppKit
+
+    final class Cover: NSWindow {
+        override var canBecomeKey: Bool { true }
+    }
+
+    let rect = CommandLine.arguments.dropFirst().compactMap { Double($0) }
+    let activates = CommandLine.arguments.contains("activate")
+    let app = NSApplication.shared
+    // Launching would switch to it otherwise; Terminal is already the app in front.
+    app.setActivationPolicy(activates ? .accessory : .prohibited)
+    let cover = Cover(contentRect: NSRect(x: rect[0], y: rect[1], width: rect[2], height: rect[3]),
+                      styleMask: [.borderless], backing: .buffered, defer: false)
+    cover.backgroundColor = .darkGray
+    if activates { app.activate(ignoringOtherApps: true) }
+    cover.orderFrontRegardless()
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+        print("ready")
+        fflush(stdout)
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 30) { exit(0) }
+    app.run()
+    """
 }

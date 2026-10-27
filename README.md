@@ -33,8 +33,8 @@ release ──► rule cleanup (fillers, replacements, spoken commands)
 | Double-tap **Right ⌥** | Ask window opens for typing (mic off). Tap Right ⌥ to add speech |
 | Hold **Right ⌥** | Talk while held; the words land in the Ask window |
 | Return or the send button | Send the question (nothing is sent before this). Shift+Return = new line, Esc = cancel |
-| Esc, Fn, or click ✕ | Close the answer (also cancels one still coming). Right ⌥ closes it and starts a new question |
-| **Shift+Esc**, or click **–** on the answer | Tuck it into a chip in the bottom-right corner (the answer keeps coming). Shift+Esc again or a click on the chip brings it back; the chip's ✕ closes it. Esc and Fn leave a tucked answer alone |
+| Esc, or click **–** on the answer | Tuck it into a chip in the bottom-right corner (the answer keeps coming). Esc again or a click on the chip brings it back |
+| **Shift+Esc**, Fn, or click ✕ | Close the answer (also cancels one still coming), from the bubble or the chip. Fn leaves a tucked answer alone. Right ⌥ closes it and starts a new question |
 
 Command mode needs Apple Intelligence enabled (it's the edit engine) and isn't available when the main hotkey is ⌃⌥.
 
@@ -47,7 +47,7 @@ Notes:
 
 ## Ask (screen questions)
 
-Tap the Ask key (Right ⌥ by default, Settings → General) to talk, or double-tap it to type. The question builds up in the Ask window, editable, and is sent only when you press Return or the send button. Then LocalFlow screenshots the display under your pointer (leaving its own windows and outline out) and sends both to a local vision model in [Ollama](https://ollama.com) at 127.0.0.1. Blue dots and "Thinking" show until the first word arrives, with a seconds count once it's been a few seconds. The answer streams into a bubble with copy, – and ✕ buttons. The bubble sits with your ordinary windows: click any app and it comes in front, click the bubble and it comes back. If another window covers it completely, it tucks itself into the corner chip. The blue screen outline shows only while Ask is looking: while you write the question, and from Send until the first word (not over an answer, not while tucked away).
+Tap the Ask key (Right ⌥ by default, Settings → General) to talk, or double-tap it to type. The question builds up in the Ask window, editable, and is sent only when you press Return or the send button. Then LocalFlow screenshots the display under your pointer (leaving its own windows and outline out) and sends both to a local vision model in [Ollama](https://ollama.com) at 127.0.0.1. Blue dots and "Thinking" show until the first word arrives, with a seconds count once it's been a few seconds. The answer streams into a bubble with copy, – and ✕ buttons. A new answer floats over everything, so the app you were in can't cover it before you've seen it. Once you click somewhere else it sits with your ordinary windows: click any app and it comes in front, click the bubble and it comes back. If another window covers it completely, it tucks itself into the corner chip. The blue screen outline shows only while Ask is looking: while you write the question, and from Send until the first word (not over an answer, not while tucked away).
 
 - **Model:** `qwen3.5:9b` (6.6 GB download, about 6.4 GB in memory). Picked after testing the vision models on this M4 Max against real screenshots: it was the only small one that read every number correctly. `ollama pull qwen3.5:9b` once; change the tag in Settings.
 - **Memory:** the model starts loading when the Ask window opens (so it loads while you talk or type) and unloads 5 minutes after the last answer.

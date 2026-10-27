@@ -271,6 +271,28 @@ struct AskRenderTests {
         #expect(AnswerPanel.isCovered(bubble, by: windows) == covered)
     }
 
+    @Test("a click on an app's window sends the bubble behind it; the desktop, Dock and menu bar don't", arguments: [
+        (42, [window(x: 0, y: 0, w: 900, h: 600, number: 42)], 42 as Int?),
+        (42, [window(x: 0, y: 0, w: 1512, h: 982, layer: 20, number: 42)], nil),         // the Dock
+        (42, [window(x: 0, y: 0, w: 1512, h: 982, layer: -2147483603, number: 42)], nil), // the desktop
+        (42, [window(x: 0, y: 0, w: 900, h: 600, number: 7)], nil),                      // not listed
+        (0, [window(x: 0, y: 0, w: 900, h: 600, number: 0)], nil),                       // nothing under the click
+    ] as [(Int, [[String: Any]], Int?)])
+    func windowToGoBehind(clicked: Int, windows: [[String: Any]], expected: Int?) {
+        #expect(AnswerPanel.windowToGoBehind(clicked, among: windows) == expected)
+    }
+
+    @Test("switching to an app finds its frontmost ordinary window", arguments: [
+        ([window(x: 0, y: 0, w: 500, h: 300, number: 3, pid: 99),
+          window(x: 0, y: 0, w: 500, h: 300, layer: 25, number: 4, pid: 7),
+          window(x: 0, y: 0, w: 500, h: 300, number: 5, pid: 7),
+          window(x: 0, y: 0, w: 500, h: 300, number: 6, pid: 7)], 5 as Int?),
+        ([window(x: 0, y: 0, w: 500, h: 300, number: 3, pid: 99)], nil),              // no windows open
+    ] as [([[String: Any]], Int?)])
+    func frontWindow(windows: [[String: Any]], expected: Int?) {
+        #expect(AnswerPanel.frontWindow(of: 7, among: windows) == expected)
+    }
+
     @Test("screen glow renders at the screen's size")
     func rendersGlow() throws {
         let size = CGSize(width: 1512, height: 982)
@@ -291,8 +313,11 @@ struct AskRenderTests {
 }
 
 /// A window as CGWindowListCopyWindowInfo describes it.
-private func window(x: CGFloat, y: CGFloat, w: CGFloat, h: CGFloat, layer: Int = 0, alpha: Double = 1) -> [String: Any] {
+private func window(x: CGFloat, y: CGFloat, w: CGFloat, h: CGFloat, layer: Int = 0, alpha: Double = 1,
+                    number: Int = 1, pid: Int = 1) -> [String: Any] {
     [
+        kCGWindowNumber as String: number,
+        kCGWindowOwnerPID as String: pid,
         kCGWindowLayer as String: layer,
         kCGWindowAlpha as String: alpha,
         kCGWindowBounds as String: CGRect(x: x, y: y, width: w, height: h).dictionaryRepresentation,

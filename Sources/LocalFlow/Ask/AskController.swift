@@ -84,7 +84,7 @@ final class AskController {
     /// A bubble or chip is up, or an answer is on its way.
     var isActive: Bool { answerPanel.isVisible || run != nil }
 
-    /// The full bubble is up (not minimized): what Esc and Fn close.
+    /// The full bubble is up (not minimized): what Fn closes.
     var isExpanded: Bool { answerPanel.isVisible && !answerPanel.isMinimized }
 
     var presence: AnswerPresence {
@@ -92,10 +92,10 @@ final class AskController {
         return answerPanel.isMinimized ? .tucked : .open
     }
 
-    /// Shift+Esc: tuck the answer into the corner chip (it keeps coming).
+    /// Esc: tuck the answer into the corner chip (it keeps coming).
     func minimize() { answerPanel.minimize() }
 
-    /// Shift+Esc on the chip: bring the answer back.
+    /// Esc on the chip: bring the answer back.
     func expand() { answerPanel.expand() }
 
     /// An answer is being worked on (capturing or streaming).

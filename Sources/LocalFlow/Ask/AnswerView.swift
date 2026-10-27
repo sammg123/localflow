@@ -135,8 +135,8 @@ struct AnswerView: View {
                     }
                 }
             }
-            iconButton("minus", label: "Minimize", help: "Minimize (⇧Esc)", action: onMinimize)
-            iconButton("xmark", label: "Close", action: onClose)
+            iconButton("minus", label: "Minimize", help: "Minimize (Esc)", action: onMinimize)
+            iconButton("xmark", label: "Close", help: "Close (⇧Esc)", action: onClose)
         }
     }
 

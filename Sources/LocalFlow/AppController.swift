@@ -374,15 +374,15 @@ final class AppController {
     }
 
     private var askCloseHint: String {
-        "Esc to close   ·   ⇧Esc to minimize   ·   \(askKeyName) to ask again"
+        "Esc to minimize   ·   ⇧Esc to close   ·   \(askKeyName) to ask again"
     }
 
     private func updateAskEscape() {
-        // Live while the chip is up too, for Shift+Esc; plain Esc leaves the chip alone.
+        // Live while the chip is up too: Esc brings it back, Shift+Esc closes it.
         askHotkeyMonitor?.escapeEnabled = askSession.phase.isOpen || ask.presence != .none
     }
 
-    /// Esc closes the Ask window or the answer; Shift+Esc tucks the answer away and back.
+    /// Esc cancels the Ask window, or tucks the answer away and back; Shift+Esc closes it.
     private func askEscape(shift: Bool) {
         switch AskEscape.action(shift: shift, windowOpen: askSession.phase.isOpen, answer: ask.presence) {
         case .cancelWindow: askSession.cancel()

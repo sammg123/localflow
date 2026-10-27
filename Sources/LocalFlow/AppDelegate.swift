@@ -5,6 +5,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var controller: AppController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.mainMenu = MainMenu.make()
         controller = AppController()
         controller?.start()
     }

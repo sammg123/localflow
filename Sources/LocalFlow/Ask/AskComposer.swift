@@ -73,6 +73,7 @@ final class AskComposerPanel: ComposerSurface {
     let model = ComposerModel()
     var onSend: (() -> Void)?
     var onCancel: (() -> Void)?
+    var onOpenChats: (() -> Void)?
 
     private let panel: ComposerWindow
     private var keyMonitor: Any?
@@ -96,7 +97,8 @@ final class AskComposerPanel: ComposerSurface {
         panel.becomesKeyOnlyIfNeeded = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         panel.contentView = FirstClickHostingView(
-            rootView: AskComposerView(model: model, onSend: { [weak self] in self?.onSend?() })
+            rootView: AskComposerView(model: model, onSend: { [weak self] in self?.onSend?() },
+                                      onOpenChats: { [weak self] in self?.onOpenChats?() })
         )
     }
 

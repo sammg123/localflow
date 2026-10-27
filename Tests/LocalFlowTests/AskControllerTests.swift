@@ -53,6 +53,7 @@ final class FakeSurface: AnswerSurface {
     let model = AnswerModel()
     var onClose: (() -> Void)?
     var onMinimizeChange: (() -> Void)?
+    var onOpenChats: (() -> Void)?
     private(set) var isVisible = false
     private(set) var isMinimized = false
     private(set) var closeHint = ""
@@ -359,10 +360,11 @@ struct AskControllerTests {
 struct AskControllerMemoryTests {
     let client = FakeModelClient()
     let surface = FakeSurface()
+    let chats = AskChatStore(fileURL: nil)
 
     private func makeController(limit: @escaping @MainActor () -> Int = { 5 }) -> AskController {
         AskController(client: client, surface: surface, indicator: FakeIndicator(),
-                      capture: { _ in Data([1]) }, memoryLimit: limit, closeHint: "")
+                      capture: { _ in Data([1]) }, memoryLimit: limit, chats: chats, closeHint: "")
     }
 
     private func ask(_ controller: AskController, _ question: String) async {
@@ -439,7 +441,7 @@ struct AskControllerMemoryTests {
         #expect(controller.rememberedTurns == 0)
     }
 
-    @Test("lowering the limit forgets the extra turns right away")
+    @Test("lowering the limit shrinks what follow-ups carry right away")
     func lowerLimitTrims() async {
         var limit = 5
         let controller = makeController(limit: { limit })
@@ -448,10 +450,71 @@ struct AskControllerMemoryTests {
         }
 
         limit = 1
-        controller.applyMemoryLimit()
         #expect(controller.rememberedTurns == 1)
         limit = 0
-        controller.applyMemoryLimit()
         #expect(controller.rememberedTurns == 0)
+    }
+
+    @Test("every answer goes in the chat log; one forgotten mid-answer is its own chat")
+    func answersAreLogged() async {
+        client.tokens = ["one ", "two ", "three"]
+        client.tokenDelay = .milliseconds(30)
+        let controller = makeController()
+        await ask(controller, "First?")
+
+        controller.submit("Count for me")
+        for _ in 0..<100 where surface.model.answer.isEmpty {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        controller.forgetConversation()
+        for _ in 0..<200 where controller.isRunning {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+
+        #expect(chats.log.chats.map(\.title) == ["Count for me", "First?"])
+        #expect(chats.log.chats[0].turns.first?.answer == "one two three")
+        #expect(chats.currentChat == nil)
+    }
+
+    @Test("an answer still coming when another chat is picked back up stays out of that chat")
+    func continueMidAnswer() async throws {
+        let controller = makeController()
+        await ask(controller, "Old chat?")
+        controller.forgetConversation()
+        await ask(controller, "Other chat?")
+        let old = try #require(chats.log.chats.last)
+        client.tokens = ["one ", "two ", "three"]
+        client.tokenDelay = .milliseconds(30)
+
+        controller.submit("Count for me")
+        for _ in 0..<100 where surface.model.answer.isEmpty {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        chats.continueChat(old.id)
+        for _ in 0..<200 where controller.isRunning {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+
+        let continued = try #require(chats.log.chats.first { $0.id == old.id })
+        #expect(continued.turns.map(\.question) == ["Old chat?"])
+        #expect(chats.currentChat?.id == old.id)
+        #expect(chats.log.chats.contains { $0.turns.map(\.question) == ["Other chat?", "Count for me"] })
+    }
+
+    @Test("a follow-up after a restart still has the earlier turn")
+    func memorySurvivesRestart() async {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("localflow-chats-\(UUID())/ask-chats.json")
+        let before = AskController(client: client, surface: surface, indicator: FakeIndicator(),
+                                   capture: { _ in Data([1]) }, memoryLimit: { 5 },
+                                   chats: AskChatStore(fileURL: file), closeHint: "")
+        await ask(before, "What's this slide?")
+
+        let after = AskController(client: client, surface: FakeSurface(), indicator: FakeIndicator(),
+                                  capture: { _ in Data([1]) }, memoryLimit: { 5 },
+                                  chats: AskChatStore(fileURL: file), closeHint: "")
+        await ask(after, "Give me an example")
+
+        #expect(client.bodies[1].messages.map(\.content).contains("What's this slide?"))
     }
 }

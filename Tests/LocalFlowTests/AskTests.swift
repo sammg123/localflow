@@ -342,18 +342,6 @@ struct AskMemoryTests {
     private let two = AskTurn(question: "Define it", answer: "Each player's best response.")
     private let three = AskTurn(question: "Example?", answer: "Prisoner's dilemma.")
 
-    @Test("keeps the newest turns and forgets the oldest past the limit")
-    func rollsOff() {
-        let remembered = AskMemory.remembering([one, two], adding: three, limit: 2)
-
-        #expect(remembered == [two, three])
-    }
-
-    @Test("a limit of zero remembers nothing")
-    func limitZero() {
-        #expect(AskMemory.remembering([one], adding: two, limit: 0).isEmpty)
-    }
-
     @Test("history fits a size budget, dropping the oldest turns first")
     func historyBudget() {
         let long = AskTurn(question: String(repeating: "q", count: 600), answer: String(repeating: "a", count: 600))

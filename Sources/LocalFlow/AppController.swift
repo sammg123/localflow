@@ -48,6 +48,7 @@ final class AppController {
     private var askHotkeyMonitor: HotkeyMonitor?
     private var ask: AskController!
     private var askSession: AskSession!
+    private var askChats: AskHistoryWindowController!
     private var menuBar: MenuBarController!
     private var hud: HUDPanel!
     private var livePanel: LivePanel!
@@ -102,10 +103,12 @@ final class AppController {
         menuBar = MenuBarController(controller: self)
         settingsWindow = SettingsWindowController(controller: self)
         llmPolisher = TranscriberFactory.makeLLMPolisher()
-        ask = AskController(closeHint: askCloseHint)
+        ask = AskController(chats: AskChatStore(fileURL: AskChatStore.defaultURL), closeHint: askCloseHint)
+        askChats = AskHistoryWindowController(store: ask.chats) { [weak self] id in self?.continueAskChat(id) }
+        let composer = AskComposerPanel()
         askSession = AskSession(
             mic: self,
-            composer: AskComposerPanel(),
+            composer: composer,
             answers: ask,
             transcribe: { [weak self] samples in
                 guard let engine = self?.transcriber else { throw CancellationError() }
@@ -117,6 +120,11 @@ final class AppController {
         // Esc closes the Ask window or the answer, from any app, while one is up.
         askSession.onPhaseChange = { [weak self] _ in self?.updateAskEscape() }
         ask.onChange = { [weak self] in self?.updateAskEscape() }
+        ask.onOpenChats = { [weak self] in self?.showAskChats() }
+        composer.onOpenChats = { [weak self] in
+            self?.askSession.closeKeepingDraft()
+            self?.showAskChats()
+        }
 
         recorder.levelHandler = { [weak self] level in
             DispatchQueue.main.async {
@@ -185,6 +193,7 @@ final class AppController {
         stopLiveWindow()
         askSession?.cancel()
         ask?.dismiss()
+        ask?.chats.flush()
         askHotkeyMonitor?.stopMonitoring()
         hotkeyMonitor?.stopMonitoring()
         if case .recording = state {
@@ -212,14 +221,32 @@ final class AppController {
         configureAskHotkey()
     }
 
-    var askRememberedTurns: Int { ask?.rememberedTurns ?? 0 }
+    /// A chat is going: the next question joins it.
+    var askHasCurrentChat: Bool { ask?.chats.currentChat != nil }
 
     func forgetAskConversation() {
         ask.forgetConversation()
     }
 
-    func askMemoryLimitChanged() {
-        ask.applyMemoryLimit()
+    func showAskChats() {
+        askChats.show()
+    }
+
+    /// From the Chats window: the next question joins that chat, and the Ask window opens
+    /// over the app that was in front, ready for typing.
+    private func continueAskChat(_ id: AskChat.ID) {
+        ask.chats.continueChat(id)
+        askChats.close()
+        NSApp.deactivate()
+        Task { @MainActor [weak self] in
+            // Open once the app that was in front has taken over again, so it can't take
+            // the keyboard back from the Ask window (at most 0.6 s).
+            let me = ProcessInfo.processInfo.processIdentifier
+            for _ in 0..<12 where NSWorkspace.shared.frontmostApplication?.processIdentifier == me {
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            self?.askSession.openForTyping()
+        }
     }
 
     func engineChanged() {

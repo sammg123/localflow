@@ -101,7 +101,7 @@ struct AskEndToEndTests {
 @MainActor
 @Suite("Ask: on screen", .serialized, .enabled(if: ProcessInfo.processInfo.environment["LOCALFLOW_E2E"] == "1"))
 struct AskOnScreenTests {
-    @Test("bubble grows upward from the pill's spot and ✕ closes it on the first click")
+    @Test("bubble grows upward from the pill's spot, Chats opens the chats, and ✕ closes it")
     func bubbleStreamsAndCloses() async throws {
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.accessory)
@@ -132,8 +132,18 @@ struct AskOnScreenTests {
         #expect(frame.height > lookingHeight)
         #expect(frame.width == AnswerPanel.width)
 
+        // Clicks go to the bubble in this process only: you may be clicking other apps,
+        // which (by design) puts the bubble behind them.
+        let window = try #require(NSApp.windows.first { $0.frame == frame && $0.isVisible })
+        // Chats sits left of copy, – and ✕ (22 pt buttons, 8 pt apart).
+        var openedChats = false
+        panel.onOpenChats = { openedChats = true }
+        click(NSPoint(x: frame.maxX - 18 - 3 * (22 + 8) - 11, y: frame.maxY - 18 - 11), in: window)
+
+        #expect(openedChats)
+
         // ✕ sits at the top-right: 18 pt padding, 22 pt button.
-        click(atAppKitPoint: NSPoint(x: frame.maxX - 18 - 11, y: frame.maxY - 18 - 11), on: screen)
+        click(NSPoint(x: frame.maxX - 18 - 11, y: frame.maxY - 18 - 11), in: window)
         pump(0.5)
 
         #expect(closed)
@@ -144,6 +154,7 @@ struct AskOnScreenTests {
     func answerTextCopies() async throws {
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.accessory)
+        NSApp.mainMenu = MainMenu.make() // as the app has it; its shortcuts must not clash
         let screen = try #require(NSScreen.main)
         let clipboard = SavedClipboard()
         defer { clipboard.restore() }
@@ -183,6 +194,29 @@ struct AskOnScreenTests {
         pump(0.2)
 
         #expect(clipboard.copiedByTest() == answer)
+    }
+
+    @Test("the Chats window shows past chats by day and one in full")
+    func chatsWindowShows() async throws {
+        _ = NSApplication.shared
+        NSApp.setActivationPolicy(.accessory)
+        var clock = Date().addingTimeInterval(-3 * 86_400)
+        let store = AskChatStore(fileURL: nil, now: { clock })
+        store.record(question: "What's the dominant strategy here?", answer: "Bottom for player one: it pays more whatever the other player does.")
+        clock = Date().addingTimeInterval(-3_600)
+        store.startNewChat()
+        store.record(question: "Why did Ask say Ollama isn't running?", answer: "Restart it:\n```sh\nbrew services restart ollama\n```\nThen **ask again**.")
+        clock = Date().addingTimeInterval(-3_000)
+        store.record(question: "And if that fails?", answer: "Check `ollama list` shows the model.")
+        let chats = AskHistoryWindowController(store: store) { _ in }
+        defer { chats.close() }
+
+        chats.show(activating: false)
+        pump(1.0)
+        Self.snapshot(window: chats.contentView?.window?.windowNumber, name: "live-chats-window")
+
+        #expect(chats.isVisible)
+        #expect(chats.frame.width >= 720)
     }
 
     @Test("a long question sent from the Ask window shows the dots and Thinking until the first word")
@@ -310,6 +344,7 @@ struct AskOnScreenTests {
     func composerTakesTyping() async throws {
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.accessory)
+        NSApp.mainMenu = MainMenu.make() // as the app has it; its shortcuts must not clash
         let screen = try #require(NSScreen.main)
         let composer = AskComposerPanel()
         var sent: String?
@@ -449,6 +484,16 @@ struct AskOnScreenTests {
             timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
             context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1)
         if let event { NSApp.postEvent(event, atStart: false) }
+    }
+
+    /// Saves one window, even partly covered, when LOCALFLOW_SNAPSHOT_DIR is set.
+    private static func snapshot(window number: Int?, name: String) {
+        guard let dir = ProcessInfo.processInfo.environment["LOCALFLOW_SNAPSHOT_DIR"], let number else { return }
+        let capture = Process()
+        capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+        capture.arguments = ["-x", "-o", "-l", "\(number)", "\(dir)/\(name).png"]
+        try? capture.run()
+        capture.waitUntilExit()
     }
 
     /// Saves what is on screen in a rect (AppKit coordinates) when LOCALFLOW_SNAPSHOT_DIR is set.

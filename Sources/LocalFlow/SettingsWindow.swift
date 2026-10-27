@@ -94,10 +94,10 @@ struct SettingsView: View {
             TextField("Ask model:", text: $settings.askModel, prompt: Text(Settings.defaultAskModel))
             Stepper(value: $settings.askMemoryTurns, in: 0...20) {
                 Text(settings.askMemoryTurns == 0
-                     ? "Ask forgets each question (no follow-ups)"
-                     : "Ask remembers the last \(settings.askMemoryTurns) questions for follow-ups")
+                     ? "Follow-ups carry nothing from earlier in the chat"
+                     : "Follow-ups carry the chat's last \(settings.askMemoryTurns) questions")
             }
-            Text("Tap to ask out loud, double-tap to type, hold to talk while held. Your question shows in the Ask window and nothing is sent until you press Return or the send button. A local vision model in Ollama reads a screenshot and answers in a bubble; the voice key or ✕ closes it. Memory stays on this Mac and clears when LocalFlow quits.")
+            Text("Tap to ask out loud, double-tap to type, hold to talk while held. Your question shows in the Ask window and nothing is sent until you press Return or the send button. A local vision model in Ollama reads a screenshot and answers in a bubble; the voice key or ✕ closes it. Every chat is saved on this Mac only, so you can look back through and search them. A chat ends after 30 minutes quiet or when you start a new one.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -136,9 +136,6 @@ struct SettingsView: View {
         .padding(.vertical, 8)
         .onChange(of: settings.hotkey) { _, newValue in
             controller?.hotkeyChanged(to: newValue)
-        }
-        .onChange(of: settings.askMemoryTurns) { _, _ in
-            controller?.askMemoryLimitChanged()
         }
         .onChange(of: settings.askKey) { _, _ in
             controller?.askKeyChanged()

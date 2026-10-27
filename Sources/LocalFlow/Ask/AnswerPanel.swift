@@ -60,6 +60,7 @@ final class AnswerPanel {
     let model = AnswerModel()
     var onClose: (() -> Void)?
     var onMinimizeChange: (() -> Void)?
+    var onOpenChats: (() -> Void)?
 
     private let panel: NSPanel
     private let hosting: NSHostingView<AnswerView>
@@ -104,6 +105,7 @@ final class AnswerPanel {
             model: model,
             closeHint: closeHint,
             onCopy: { pasteboardCopy() },
+            onOpenChats: { [weak self] in self?.onOpenChats?() },
             onMinimize: { [weak self] in self?.minimize() },
             onClose: { [weak self] in self?.onClose?() }
         )

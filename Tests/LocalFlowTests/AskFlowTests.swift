@@ -26,6 +26,16 @@ struct AskFlowTests {
         #expect(result.effects == [.startMic, .open, .chimeUnlessDoubleTap])
     }
 
+    @Test("picking a chat back up opens the window for typing, mic off; ignored while it's open")
+    func openTyping() {
+        let result = run([.openTyping])
+
+        #expect(result.phase == .typing)
+        #expect(result.effects == [.openTyping])
+        #expect(run([.openTyping], from: .typing).effects.isEmpty)
+        #expect(run([.openTyping], from: .listening(since: t0)).effects.isEmpty)
+    }
+
     @Test("a double-tap opens it for typing: mic off, nothing transcribed")
     func doubleTapTypes() {
         let result = run(doubleTap)

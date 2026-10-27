@@ -75,6 +75,7 @@ struct AnswerView: View {
     /// False in render tests: ImageRenderer can't draw a ScrollView.
     var scrolls = true
     var onCopy: () -> Void = {}
+    var onOpenChats: () -> Void = {}
     var onMinimize: () -> Void = {}
     var onClose: () -> Void = {}
 
@@ -117,6 +118,7 @@ struct AnswerView: View {
                 .foregroundStyle(Self.secondary)
                 .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            iconButton("clock.arrow.circlepath", label: "Chats", help: "All your chats", action: onOpenChats)
             if model.phase == .done {
                 iconButton(copied ? "checkmark" : "doc.on.doc", label: "Copy answer") {
                     onCopy()
@@ -226,7 +228,7 @@ struct AnswerView: View {
     }
 
     /// **bold**, *italic* and `code` from the model; anything else shows as typed.
-    private static func inlineMarkdown(_ text: String) -> AttributedString {
+    static func inlineMarkdown(_ text: String) -> AttributedString {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
     }

@@ -11,6 +11,8 @@ protocol AnswerSurface: AnyObject {
     var onClose: (() -> Void)? { get set }
     /// The user minimized or expanded it (the – button, the chip, or covering it).
     var onMinimizeChange: (() -> Void)? { get set }
+    /// The Chats button.
+    var onOpenChats: (() -> Void)? { get set }
     /// A fresh bubble for this question, sized to it from the start.
     func show(question: String, on screen: NSScreen?)
     func hide()
@@ -30,8 +32,9 @@ extension AnswerPanel: AnswerSurface {}
 extension ScreenGlow: ListeningIndicator {}
 
 /// Ask's answering half: takes a finished question, screenshots the display, streams
-/// the local vision model's answer into a bubble where the pill appears, and remembers
-/// the last few turns for follow-ups. The Ask window (AskSession) writes the question.
+/// the local vision model's answer into a bubble where the pill appears, and logs it in
+/// the chat history, whose current chat gives follow-ups their context. The Ask window
+/// (AskSession) writes the question.
 @MainActor
 final class AskController {
     typealias ScreenCapture = @MainActor (NSScreen?) async throws -> Data
@@ -40,16 +43,19 @@ final class AskController {
     private let answerPanel: AnswerSurface
     private let glow: ListeningIndicator
     private let captureScreen: ScreenCapture
-    /// How many finished questions to remember for follow-ups (read per ask).
+    /// How many of the current chat's turns a follow-up carries (read per ask).
     private let memoryLimit: @MainActor () -> Int
     private let settings = Settings.shared
-    /// In memory only: gone on quit, never written to disk or the log.
-    private var turns: [AskTurn] = []
-    /// Bumped by Forget, so an answer still arriving when it's pressed isn't remembered.
+    /// Every finished answer; never in the event log.
+    let chats: AskChatStore
+    /// Bumped by New Chat, so an answer still arriving when it's pressed stays out of
+    /// the new conversation.
     private var memoryEpoch = 0
 
     /// An answer went up, came down, minimized or expanded.
     var onChange: (() -> Void)?
+    /// The answer's Chats button.
+    var onOpenChats: (() -> Void)?
 
     private var screen: NSScreen?
     /// The Ask window is open: the user is asking about this screen.
@@ -63,14 +69,17 @@ final class AskController {
          indicator: ListeningIndicator? = nil,
          capture: @escaping ScreenCapture = AskController.captureDisplay,
          memoryLimit: @escaping @MainActor () -> Int = { Settings.shared.askMemoryTurns },
+         chats: AskChatStore? = nil,
          closeHint: String) {
         self.client = client
         self.memoryLimit = memoryLimit
+        self.chats = chats ?? AskChatStore(fileURL: nil)
         answerPanel = surface ?? AnswerPanel(closeHint: closeHint)
         glow = indicator ?? ScreenGlow()
         captureScreen = capture
         answerPanel.updateCloseHint(closeHint)
         answerPanel.onClose = { [weak self] in self?.dismiss() }
+        answerPanel.onOpenChats = { [weak self] in self?.onOpenChats?() }
         answerPanel.onMinimizeChange = { [weak self] in
             self?.updateOutline()
             self?.onChange?()
@@ -102,16 +111,13 @@ final class AskController {
     /// An answer is being worked on (capturing or streaming).
     var isRunning: Bool { run != nil }
 
-    var rememberedTurns: Int { turns.count }
+    /// Turns the next question carries along.
+    var rememberedTurns: Int { chats.memory(limit: memoryLimit()).count }
 
+    /// The next question starts a new chat; the history keeps the old one.
     func forgetConversation() {
-        turns = []
+        chats.startNewChat()
         memoryEpoch += 1
-    }
-
-    /// The memory setting changed: a lower limit forgets the extra turns now, not later.
-    func applyMemoryLimit() {
-        turns = Array(turns.suffix(max(0, memoryLimit())))
     }
 
     func updateCloseHint(_ hint: String) {
@@ -187,6 +193,8 @@ final class AskController {
         let isCurrent = { [weak self] in self?.generation == generation && !Task.isCancelled }
         let started = ContinuousClock.now
         let epoch = memoryEpoch
+        // The answer belongs to the chat it was asked in, even if another is picked up meanwhile.
+        let askedIn = chats.currentChat?.id
         func fail(_ message: String) {
             guard isCurrent() else { return }
             model.phase = .failed(message)
@@ -205,8 +213,7 @@ final class AskController {
         guard isCurrent() else { return }
         model.phase = .thinking
 
-        let limit = max(0, memoryLimit())
-        let history = AskMemory.fitting(Array(turns.suffix(limit)), budget: AskLimits.historyBudget)
+        let history = AskMemory.fitting(chats.memory(limit: memoryLimit()), budget: AskLimits.historyBudget)
         let body = OllamaChatBody.ask(model: settings.effectiveAskModel, question: question,
                                       imageBase64: png.base64EncodedString(), history: history)
         var firstToken: Duration?
@@ -226,10 +233,7 @@ final class AskController {
                 return
             }
             model.phase = .done
-            if epoch == memoryEpoch {
-                turns = AskMemory.remembering(turns, adding: AskTurn(question: question, answer: model.answer),
-                                              limit: max(0, memoryLimit()))
-            }
+            chats.record(question: question, answer: model.answer, in: askedIn, joinsConversation: epoch == memoryEpoch)
             FlowLog.shared.write("ask answered: question \(question.count) chars, image \(png.count / 1024) KB, "
                 + "first token \(firstToken.map { "\($0)" } ?? "-"), \(model.answer.count) chars in \(started.duration(to: .now))")
         } catch {

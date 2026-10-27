@@ -104,6 +104,27 @@ struct AskSessionTests {
         session.keyUp(held: 0.1, at: time + 0.1)
     }
 
+    @Test("going to Chats from the Ask window keeps what was typed for when it opens again")
+    func draftSurvivesChats() {
+        let (session, _) = makeSession()
+        tap(session, at: 0)
+        session.keyDown(at: 0.25) // double-tap: typing
+        composer.model.text = "which strategy wins"
+
+        session.closeKeepingDraft()
+
+        #expect(!composer.isVisible)
+        #expect(session.phase == .closed)
+        session.openForTyping()
+        #expect(composer.isVisible)
+        #expect(composer.model.mode == .typing)
+        #expect(composer.model.text == "which strategy wins")
+        // Kept once: the next time it opens empty.
+        session.cancel()
+        session.openForTyping()
+        #expect(composer.model.text.isEmpty)
+    }
+
     @Test("tap, talk, tap: the question waits in the window until Return")
     func tapTalkTap() async {
         let (session, _) = makeSession()

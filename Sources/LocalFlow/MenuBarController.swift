@@ -77,13 +77,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         historyItem.submenu = historyMenu
         menu.addItem(historyItem)
 
-        let remembered = controller.askRememberedTurns
-        let forget = NSMenuItem(
-            title: remembered == 0 ? "Ask Has No Conversation Yet" : "Forget Ask Conversation (\(remembered))",
-            action: #selector(forgetAsk), keyEquivalent: "")
-        forget.target = self
-        forget.isEnabled = remembered > 0
-        menu.addItem(forget)
+        let chats = NSMenuItem(title: "Ask Chats…", action: #selector(openAskChats), keyEquivalent: "")
+        chats.target = self
+        menu.addItem(chats)
+
+        let newChat = NSMenuItem(title: "Start New Ask Chat", action: #selector(forgetAsk), keyEquivalent: "")
+        newChat.target = self
+        newChat.isEnabled = controller.askHasCurrentChat
+        newChat.toolTip = "Your next question starts fresh; this chat stays in Ask Chats"
+        menu.addItem(newChat)
 
         menu.addItem(.separator())
 
@@ -110,6 +112,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     // MARK: - Actions
 
     @objc private func toggleHandsFree() { controller?.toggleHandsFree() }
+
+    @objc private func openAskChats() { controller?.showAskChats() }
 
     @objc private func pasteLast() {
         controller?.pasteLastTranscript()

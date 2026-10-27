@@ -53,7 +53,9 @@ Tap the Ask key (Right ⌥ by default, Settings → General) to talk, or double-
 - **Memory:** the model starts loading when the Ask window opens (so it loads while you talk or type) and unloads 5 minutes after the last answer.
 - **Speed (M4 Max, 36 GB):** about 5 s from release to a full answer with the model warm, 12-13 s from cold.
 - **Permission:** Screen Recording, asked for on first use. Dictation never needs it.
-- **Follow-ups:** Ask remembers the last 5 questions and answers (Settings, 0 to 20) and sends them as text with each new question, so "what about the second one?" works. Older ones roll off; only the newest question carries a screenshot. Memory is RAM-only, clears on quit, and the menu has "Forget Ask Conversation".
+- **Copying:** drag over any words in the answer and press Cmd+C (Cmd+A selects it all), or use the copy button for the whole answer. Pressing on the words gives the bubble the keyboard; the buttons leave it with your app.
+- **Chats:** every question and answer is saved on this Mac in `~/Library/Application Support/LocalFlow/ask-chats.json` (readable only by your account, never in the event log). The clock button in the Ask window or the answer, or **Ask Chats…** in the menu, opens every chat, grouped by day and searchable by anything said in it. From there: **Continue in Ask** (your next question picks that chat back up), **Copy Chat**, or **Delete**.
+- **Follow-ups:** questions asked within 30 minutes of each other are one chat. Each new question carries the chat's last 5 questions and answers as text (Settings, 0 to 20; about 3,000 tokens at most), so "what about the second one?" works, even after a restart. Only the newest question carries a screenshot. **Start New Ask Chat** in the menu makes the next question start fresh.
 - Pressing another key while the Ask key is held (Option+arrow, Option+letter) is treated as a shortcut: the window never opens, and inside the window it types the character.
 - The window takes the keyboard while it's open (⌘V, ⌘A, ⌘Z work), without switching apps; Esc or sending hands it back.
 - Weak spot: it reads screens reliably but multi-step reasoning (e.g. writing the next lines of code) can be wrong. Check its work.
@@ -89,6 +91,7 @@ First run:
 - No network calls except the one-time model downloads (FluidAudio's models from Hugging Face; Apple's models from Apple).
 - Audio is held in memory only, never written to disk.
 - Dictation history is in-memory by default (Settings → "Save history to disk" to opt in).
+- Ask chats are saved to disk (see Ask → Chats) so they can be searched; delete any from Ask Chats.
 - Pasteboard entries are marked `org.nspasteboard.ConcealedType` so clipboard managers skip them.
 
 ## Feature parity vs Wispr Flow

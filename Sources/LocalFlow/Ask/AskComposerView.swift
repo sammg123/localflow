@@ -7,6 +7,7 @@ struct AskComposerView: View {
 
     @ObservedObject var model: ComposerModel
     var onSend: () -> Void = {}
+    var onOpenChats: () -> Void = {}
     @FocusState private var boxFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -48,8 +49,19 @@ struct AskComposerView: View {
             case .finishing: ProgressView().controlSize(.small)
             case .typing: EmptyView()
             }
+            Button(action: onOpenChats) {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(primary.opacity(0.85))
+                    .frame(width: 22, height: 22)
+                    .background(Circle().fill(Color.white.opacity(0.1)))
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Chats")
+            .help("All your chats")
         }
-        .frame(height: 20)
+        .frame(height: 22)
     }
 
     @ViewBuilder

@@ -34,6 +34,8 @@ enum AskPhase: Equatable {
 
 enum AskEvent: Equatable {
     case keyDown(at: TimeInterval)
+    /// A chat picked back up from the history: open the window ready for typing.
+    case openTyping
     case keyUp(held: TimeInterval, at: TimeInterval)
     /// The key has been down long enough to be a hold.
     case holdReached
@@ -56,6 +58,8 @@ enum AskEffect: Equatable {
     case finishMic
     /// The window appears listening (with the outline and the model loading).
     case open
+    /// Open the window for typing, mic off.
+    case openTyping
     case showVoice
     case showTyping
     case chime
@@ -78,6 +82,7 @@ enum AskFlow {
         switch phase {
         case .closed:
             if case .keyDown = event { return (.pressed(composerOpen: false), [.startMic]) }
+            if event == .openTyping { return (.typing, [.openTyping]) }
         case .pressed(let open):
             return pressed(open: open, event) ?? (phase, [])
         case .holding(let wasOpen):

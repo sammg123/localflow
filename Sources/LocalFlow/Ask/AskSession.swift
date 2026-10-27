@@ -39,6 +39,8 @@ final class AskSession {
     private let settings = Settings.shared
 
     private var screen: NSScreen?
+    /// Words written before going to Chats, put back when the window opens for typing.
+    private var draft: String?
     /// Typed text the current voice turn adds to.
     private var typedBase = ""
     /// Bumped per mic start, so a late chime, live words or transcript can tell it's stale.
@@ -94,6 +96,20 @@ final class AskSession {
     func micLost() { handle(.micLost) }
     func cancel() { handle(.cancel) }
 
+    /// Closes the window, keeping what was written for the next `openForTyping` (going
+    /// to Chats and back).
+    func closeKeepingDraft() {
+        let text = composer.model.text
+        handle(.cancel)
+        draft = text.isEmpty ? nil : text
+    }
+
+    /// Opens the window for typing, as a double-tap does; nothing happens if it's open.
+    func openForTyping() {
+        if phase == .closed { screen = ScreenCapturer.screenUnderMouse() }
+        handle(.openTyping)
+    }
+
     /// Return or the send button. An empty box sends nothing.
     func send() {
         if phase == .typing, composer.model.question.isEmpty {
@@ -136,7 +152,9 @@ final class AskSession {
         case .finishMic:
             finishMic()
         case .open:
-            return open()
+            return open(mode: .voice)
+        case .openTyping:
+            return open(mode: .typing)
         case .showVoice:
             typedBase = composer.model.text
             composer.model.notice = nil
@@ -160,7 +178,7 @@ final class AskSession {
         return true
     }
 
-    private func open() -> Bool {
+    private func open(mode: ComposerMode) -> Bool {
         guard canOpen() else {
             stopLiveWords()
             mic?.discardAsk()
@@ -169,10 +187,12 @@ final class AskSession {
         }
         answers.prepare(on: screen) // closes the last answer
         typedBase = ""
-        composer.model.reset(mode: .voice)
+        composer.model.reset(mode: mode)
+        if mode == .typing, let draft { composer.model.text = draft }
+        draft = nil
         composer.model.keyName = keyName
         composer.show(on: screen)
-        startLiveWords()
+        if mode == .voice { startLiveWords() }
         return true
     }
 

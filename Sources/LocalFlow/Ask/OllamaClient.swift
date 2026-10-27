@@ -6,14 +6,9 @@ struct AskTurn: Equatable {
     let answer: String
 }
 
-/// The rolling conversation: the last N turns, oldest forgotten first. Text only;
-/// old screenshots are never kept or re-sent.
+/// What a follow-up carries from the current chat. Text only; old screenshots are
+/// never kept or re-sent.
 enum AskMemory {
-    static func remembering(_ turns: [AskTurn], adding turn: AskTurn, limit: Int) -> [AskTurn] {
-        guard limit > 0 else { return [] }
-        return Array((turns + [turn]).suffix(limit))
-    }
-
     /// The newest turns whose text fits `budget` characters, oldest dropped first.
     static func fitting(_ turns: [AskTurn], budget: Int) -> [AskTurn] {
         var used = 0

@@ -88,15 +88,7 @@ struct AnswerView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
-            if scrolls {
-                ScrollView {
-                    content
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { model.bodyHeight = $0 }
-                }
-                .frame(height: min(model.bodyHeight, AnswerPanel.maxBodyHeight))
-            } else {
-                content
-            }
+            content
             Text(closeHint)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Self.secondary.opacity(0.8))
@@ -140,9 +132,21 @@ struct AnswerView: View {
         }
     }
 
+    /// Only the answer scrolls. Nothing waits on the scroll view's measured height: the
+    /// working row and a failure sit outside it, and the answer shows unscrolled until
+    /// it's been measured. (A height left at zero once hid the dots.)
     @ViewBuilder
     private var content: some View {
         switch model.phase {
+        case .answering, .done:
+            if scrolls, model.bodyHeight > 0 {
+                ScrollView { measuredAnswer }
+                    .frame(height: min(model.bodyHeight, AnswerPanel.maxBodyHeight))
+            } else if scrolls {
+                measuredAnswer
+            } else {
+                answerText
+            }
         case .looking, .thinking:
             HStack(spacing: 12) {
                 ThinkingDots()
@@ -156,13 +160,6 @@ struct AnswerView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)
             .accessibilityLabel("Working on your answer")
-        case .answering, .done:
-            VStack(alignment: .leading, spacing: 10) {
-                ForEach(Array(AnswerFormatter.segments(model.answer).enumerated()), id: \.offset) { _, segment in
-                    segmentView(segment)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
         case .failed(let message):
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "exclamationmark.triangle.fill")
@@ -174,6 +171,19 @@ struct AnswerView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private var measuredAnswer: some View {
+        answerText.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { model.bodyHeight = $0 }
+    }
+
+    private var answerText: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(AnswerFormatter.segments(model.answer).enumerated()), id: \.offset) { _, segment in
+                segmentView(segment)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder

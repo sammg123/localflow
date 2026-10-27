@@ -113,8 +113,7 @@ struct AskOnScreenTests {
             panel.hide()
         }
 
-        panel.show(on: screen)
-        panel.model.question = "What's on my screen?"
+        panel.show(question: "What's on my screen?", on: screen)
         pump(0.4)
         let lookingHeight = panel.frame.height
         Self.snapshot(panel.frame, name: "live-looking")
@@ -141,6 +140,48 @@ struct AskOnScreenTests {
         #expect(!panel.isVisible)
     }
 
+    @Test("a long question sent from the Ask window shows the dots and Thinking until the first word")
+    func sendShowsWorking() async throws {
+        _ = NSApplication.shared
+        let screen = try #require(NSScreen.main)
+        let client = FakeModelClient()
+        client.tokenDelay = .seconds(3)
+        client.tokens = ["Both players pick Bottom/Right. Neither gains by switching alone, so it's the only "
+                         + "equilibrium in the table, and each player's choice is dominant whatever the other one does."]
+        let panel = AnswerPanel(closeHint: "Esc to minimize   ·   ⇧Esc to close   ·   Right ⌥ to ask again")
+        let answers = AskController(client: client, surface: panel, closeHint: "Esc to minimize   ·   ⇧Esc to close   ·   Right ⌥ to ask again")
+        let composer = AskComposerPanel()
+        let mic = FakeMic() // the session holds it weakly
+        // Long enough to wrap the question onto two lines in the bubble's header.
+        let spoken = String(repeating: "Can you look at this table of payoffs and tell me which strategy each player should pick, and why? ", count: 2)
+        let session = AskSession(
+            mic: mic, composer: composer, answers: answers,
+            transcribe: { _ in spoken },
+            canOpen: { true }, chime: {}, swallowPress: {}, holdDelay: nil, liveInterval: nil
+        )
+        defer { answers.dismiss() }
+
+        // Tap, talk, Return: the app's real send path, with the run loop running freely.
+        session.keyDown(at: 0)
+        session.keyUp(held: 0.1, at: 0.1)
+        await run(0.8)
+        session.send()
+        await run(1.5)
+        Self.snapshot(panel.frame, name: "live-send-thinking")
+        let working = panel.frame.height
+
+        #expect([.looking, .thinking].contains(panel.model.phase))
+        // Two header lines, the dots row and the hint; about 103 pt with the row missing.
+        #expect(working >= 120)
+
+        // The words replace the row, and the bubble grows to show all three lines.
+        await run(4)
+        Self.snapshot(panel.frame, name: "live-send-answer")
+
+        #expect([.answering, .done].contains(panel.model.phase))
+        #expect(panel.frame.height > working)
+    }
+
     @Test("– tucks the answer into the corner chip, the chip brings it back, and another app stays under it until clicked")
     func bubbleMinimizesAndExpands() async throws {
         _ = NSApplication.shared
@@ -156,8 +197,7 @@ struct AskOnScreenTests {
             panel.hide()
         }
 
-        panel.show(on: screen)
-        panel.model.question = "What's the Nash equilibrium in this table?"
+        panel.show(question: "What's the Nash equilibrium in this table?", on: screen)
         panel.model.answer = "Both players pick **Bottom/Right**: neither gains by switching alone."
         panel.model.phase = .done
         pump(0.6)
@@ -309,6 +349,12 @@ struct AskOnScreenTests {
     }
 
     /// Runs the app's event loop for a while so windows draw and clicks get delivered.
+    /// Lets the app's own tasks (transcribing, answering) run; the main run loop keeps
+    /// drawing meanwhile.
+    private func run(_ seconds: TimeInterval) async {
+        try? await Task.sleep(for: .seconds(seconds))
+    }
+
     private func pump(_ seconds: TimeInterval) {
         let until = Date(timeIntervalSinceNow: seconds)
         while Date() < until {

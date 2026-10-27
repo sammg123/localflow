@@ -11,7 +11,8 @@ protocol AnswerSurface: AnyObject {
     var onClose: (() -> Void)? { get set }
     /// The user minimized or expanded it (the – button, the chip, or covering it).
     var onMinimizeChange: (() -> Void)? { get set }
-    func show(on screen: NSScreen?)
+    /// A fresh bubble for this question, sized to it from the start.
+    func show(question: String, on screen: NSScreen?)
     func hide()
     func minimize()
     func expand()
@@ -158,8 +159,7 @@ final class AskController {
         }
         generation += 1
         let current = generation
-        answerPanel.show(on: screen)
-        answerPanel.model.question = question
+        answerPanel.show(question: question, on: screen)
         run = Task { [weak self] in
             await self?.respond(question: question, generation: current)
             if self?.generation == current {

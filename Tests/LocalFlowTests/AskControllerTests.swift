@@ -57,8 +57,9 @@ final class FakeSurface: AnswerSurface {
     private(set) var isMinimized = false
     private(set) var closeHint = ""
 
-    func show(on screen: NSScreen?) {
+    func show(question: String, on screen: NSScreen?) {
         model.reset()
+        model.question = question
         isVisible = true
         isMinimized = false
     }

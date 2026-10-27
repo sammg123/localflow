@@ -89,8 +89,9 @@ final class AnswerPanel {
         hosting.rootView.closeHint = hint
     }
 
-    func show(on screen: NSScreen?) {
+    func show(question: String, on screen: NSScreen?) {
         model.reset()
+        model.question = question
         self.screen = screen
         isMinimized = false
         chip.hide()
@@ -125,7 +126,10 @@ final class AnswerPanel {
     }
 
     private func present() {
+        // Fit the content now: a question set after the first layout, or a long one,
+        // didn't always grow the window and squeezed out the working row or a line.
         hosting.layoutSubtreeIfNeeded()
+        panel.setContentSize(hosting.fittingSize)
         pinToBottom()
         shownAt = Date()
         panel.alphaValue = 0

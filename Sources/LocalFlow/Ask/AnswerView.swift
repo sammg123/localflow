@@ -183,6 +183,8 @@ struct AnswerView: View {
                 segmentView(segment)
             }
         }
+        // Drag over words to copy them; the panel takes the keyboard for Cmd+C then.
+        .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 

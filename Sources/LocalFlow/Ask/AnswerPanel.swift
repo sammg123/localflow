@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import SwiftUI
 
 /// Lets buttons work on the first click, without making the panel key first.
@@ -7,11 +8,38 @@ final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
 }
 
 /// A click anywhere in the bubble, the scrolling answer included, brings it back in
-/// front of the apps that were clicked over it.
+/// front of the apps that were clicked over it. Pressing on the answer's words takes the
+/// keyboard so Cmd+C reaches the selection (the text view asks for it; buttons don't, so
+/// a click on one leaves the keyboard with the app being worked in).
 private final class AnswerWindow: NSPanel {
+    /// Whether the latest press landed on the answer's words.
+    private var pressedOnText = false
+
+    override var canBecomeKey: Bool { pressedOnText || isKeyWindow }
+
+    /// Only a fresh press on the words takes the keyboard again, never a later makeKey.
+    override func resignKey() {
+        pressedOnText = false
+        super.resignKey()
+    }
+
     override func sendEvent(_ event: NSEvent) {
-        if event.type == .leftMouseDown { orderFrontRegardless() }
+        if event.type == .leftMouseDown {
+            orderFrontRegardless()
+            pressedOnText = isText(at: event.locationInWindow)
+        }
         super.sendEvent(event)
+    }
+
+    /// The selectable answer is a text field over a text view; the buttons and the rest
+    /// are drawn by SwiftUI.
+    private func isText(at point: NSPoint) -> Bool {
+        var view = contentView?.superview?.hitTest(point)
+        while let current = view {
+            if current is NSTextField || current is NSText { return true }
+            view = current.superview
+        }
+        return false
     }
 }
 
@@ -42,11 +70,13 @@ final class AnswerPanel {
     private var observers: [NSObjectProtocol] = []
     /// Waiting for the first click outside the bubble, while it floats.
     private var clickWatchers: [Any] = []
+    private var keyMonitor: Any?
 
     private(set) var isMinimized = false
     /// Up in any form: the full bubble or the chip.
     var isVisible: Bool { panel.isVisible || chip.isVisible }
     var frame: NSRect { panel.frame }
+    var isKey: Bool { panel.isKeyWindow }
     var chipFrame: NSRect { chip.frame }
 
     init(closeHint: String) {
@@ -101,6 +131,7 @@ final class AnswerPanel {
     func hide() {
         settleCheck?.cancel()
         stopWatchingClicks()
+        removeKeyMonitor()
         isMinimized = false
         chip.hide()
         guard panel.isVisible else { return }
@@ -111,6 +142,7 @@ final class AnswerPanel {
         guard panel.isVisible, !isMinimized else { return }
         settleCheck?.cancel()
         stopWatchingClicks()
+        removeKeyMonitor()
         isMinimized = true
         panel.orderOut(nil)
         chip.show(on: screen)
@@ -136,6 +168,7 @@ final class AnswerPanel {
         panel.level = .floating
         panel.orderFrontRegardless()
         watchForClickElsewhere()
+        installKeyMonitor()
         NSAnimationContext.runAnimationGroup { context in
             context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.18
             panel.animator().alphaValue = 1
@@ -186,6 +219,33 @@ final class AnswerPanel {
     private func stopWatchingClicks() {
         clickWatchers.forEach(NSEvent.removeMonitor)
         clickWatchers = []
+    }
+
+    /// Cmd+C and Cmd+A for selected words. (LocalFlow has no Edit menu, which is what
+    /// normally routes them, and the app is usually not active.)
+    private func installKeyMonitor() {
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            MainActor.assumeIsolated {
+                guard let self, event.window === self.panel, let action = Self.editAction(for: event) else { return event }
+                return self.panel.firstResponder?.tryToPerform(action, with: nil) == true ? nil : event
+            }
+        }
+    }
+
+    private func removeKeyMonitor() {
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        keyMonitor = nil
+    }
+
+    static func editAction(for event: NSEvent) -> Selector? {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard flags == .command else { return nil }
+        switch Int(event.keyCode) {
+        case kVK_ANSI_C: return #selector(NSText.copy(_:))
+        case kVK_ANSI_A: return #selector(NSText.selectAll(_:))
+        default: return nil
+        }
     }
 
     /// Becomes an ordinary window behind the clicked one, so that app comes in front

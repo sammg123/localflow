@@ -121,6 +121,9 @@ enum AskError: Error, Equatable {
     /// The Codex tool (for ChatGPT answers) isn't on this Mac.
     case chatGPTMissing
     case chatGPTSignedOut
+    /// The ChatGPT workspace (a school or company plan) doesn't allow Codex from the
+    /// command-line tool, which is how Ask reaches it. Only its admin can change that.
+    case chatGPTWorkspaceBlocked
     case chatGPT(String)
 
     /// The kind of failure, for the log. Never the text inside it, which can echo what
@@ -134,6 +137,7 @@ enum AskError: Error, Equatable {
         case .screenCaptureFailed: return "screenCaptureFailed"
         case .chatGPTMissing: return "chatGPTMissing"
         case .chatGPTSignedOut: return "chatGPTSignedOut"
+        case .chatGPTWorkspaceBlocked: return "chatGPTWorkspaceBlocked"
         case .chatGPT: return "chatGPT"
         }
     }
@@ -156,6 +160,9 @@ enum AskError: Error, Equatable {
                 + "Install the ChatGPT app, or switch Ask to the local model in Settings."
         case .chatGPTSignedOut:
             return "Codex isn't signed in to your ChatGPT account. Open the ChatGPT app, sign in to Codex, then ask again."
+        case .chatGPTWorkspaceBlocked:
+            return "Your ChatGPT workspace only allows Codex in the Codex app, not the command-line tool Ask uses. "
+                + "Switch Ask to the local model in Settings, or sign Codex in with a personal ChatGPT plan."
         case .chatGPT(let detail):
             return "ChatGPT failed: \(detail)"
         }

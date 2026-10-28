@@ -114,6 +114,15 @@ struct CodexClientTests {
         }
     }
 
+    @Test("a school or company workspace that blocks the tool says so, not 'signed out'")
+    func workspaceBlocked() {
+        let stderr = """
+        ERROR: Reconnecting... 5/5
+        ERROR: unexpected status 403 Forbidden: {"detail":{"message":"Unauthorized: Contact your ChatGPT workspace administrator for access.","code":"codex_workspace_access_denied"}}, url: https://chatgpt.com/backend-api/codex/responses
+        """
+        #expect(AskError.fromCodex(stderr: stderr) == .chatGPTWorkspaceBlocked)
+    }
+
     @Test("any other failure passes on the tool's last line")
     func otherFailure() async throws {
         let fake = try fakeCodex(exitCode: 1, stderr: "starting\nmodel gpt-x is not supported")

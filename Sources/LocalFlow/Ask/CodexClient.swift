@@ -257,6 +257,8 @@ extension AskError {
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
         let tail = lines.suffix(3).joined(separator: " ").lowercased()
+        // Checked first: its message also says "Unauthorized", but signing in again won't help.
+        if tail.contains("codex_workspace_access_denied") { return .chatGPTWorkspaceBlocked }
         let signedOut = ["not logged in", "codex login", "unauthorized"]
         if signedOut.contains(where: tail.contains) { return .chatGPTSignedOut }
         return .chatGPT(String((lines.last ?? "it stopped without saying why").prefix(200)))

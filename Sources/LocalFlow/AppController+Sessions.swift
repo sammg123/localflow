@@ -138,7 +138,9 @@ extension AppController: AskMicrophone, HandsFreeMicrophone {
     private func startLentMic(_ mode: RecordingMode) -> Bool {
         switch state {
         case .idle, .processing: break
-        case .recording: return false // a dictation has the mic
+        case .recording:
+            NSSound.beep() // a dictation has the mic
+            return false
         }
         guard Permissions.allGranted else {
             settingsWindow.show(tab: .setup)

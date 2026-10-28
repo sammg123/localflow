@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import LocalFlow
 
-/// Every Right Option gesture, as pure state transitions: tap = talk, double-tap = type,
+/// Every Right Option gesture, as pure state transitions: tap = type, tap again = talk,
 /// hold = talk while held, and nothing is ever sent without Return or the send button.
 @Suite("Ask: Right Option gestures")
 struct AskFlowTests {
@@ -15,15 +15,31 @@ struct AskFlowTests {
         }
     }
 
-    private var tap: [AskEvent] { [.keyDown(at: t0), .keyUp(held: 0.1, at: t0 + 0.1)] }
-    private var doubleTap: [AskEvent] { tap + [.keyDown(at: t0 + 0.25)] }
+    private func tap(at time: TimeInterval) -> [AskEvent] { [.keyDown(at: time), .keyUp(held: 0.1, at: time + 0.1)] }
+    private var tap: [AskEvent] { tap(at: t0) }
 
-    @Test("a tap opens the window listening, and nothing is sent")
-    func tapListens() {
+    @Test("a tap opens the window for typing: mic off, nothing sent")
+    func tapTypes() {
         let result = run(tap)
 
-        #expect(result.phase == .listening(since: t0 + 0.1))
-        #expect(result.effects == [.startMic, .open, .chimeUnlessDoubleTap])
+        #expect(result.phase == .typing)
+        #expect(result.effects == [.openTyping])
+    }
+
+    @Test("the key going down from closed starts nothing: it may be an Option shortcut")
+    func pressStartsNothing() {
+        let result = run([.keyDown(at: t0)])
+
+        #expect(result.phase == .pressed(composerOpen: false))
+        #expect(result.effects.isEmpty)
+    }
+
+    @Test("tapping again turns the voice on, however soon after the first tap", arguments: [0.25, 2.0])
+    func secondTapTalks(gap: TimeInterval) {
+        let result = run(tap + tap(at: t0 + gap))
+
+        #expect(result.phase == .listening)
+        #expect(result.effects.suffix(3) == [.startMic, .showVoice, .chime])
     }
 
     @Test("picking a chat back up opens the window for typing, mic off; ignored while it's open")
@@ -33,24 +49,7 @@ struct AskFlowTests {
         #expect(result.phase == .typing)
         #expect(result.effects == [.openTyping])
         #expect(run([.openTyping], from: .typing).effects.isEmpty)
-        #expect(run([.openTyping], from: .listening(since: t0)).effects.isEmpty)
-    }
-
-    @Test("a double-tap opens it for typing: mic off, nothing transcribed")
-    func doubleTapTypes() {
-        let result = run(doubleTap)
-
-        #expect(result.phase == .typing)
-        #expect(result.effects.suffix(3) == [.discardMic, .swallowPress, .showTyping])
-        #expect(!result.effects.contains(.finishMic))
-    }
-
-    @Test("double-tap, then a tap, turns the voice on")
-    func doubleTapThenTap() {
-        let result = run(doubleTap + [.keyDown(at: t0 + 2), .keyUp(held: 0.1, at: t0 + 2.1)])
-
-        #expect(result.phase == .listening(since: t0 + 2.1))
-        #expect(result.effects.suffix(3) == [.startMic, .showVoice, .chimeUnlessDoubleTap])
+        #expect(run([.openTyping], from: .listening).effects.isEmpty)
     }
 
     @Test("while typing, the mic waits until the press is clearly a tap or a hold")
@@ -64,9 +63,9 @@ struct AskFlowTests {
         #expect(held.effects == [.startMic, .showVoice, .chime])
     }
 
-    @Test("tapping again stops listening and the question waits for send")
-    func tapStops() {
-        let stopped = run(tap + [.keyDown(at: t0 + 3)])
+    @Test("a tap while talking stops, however soon, and the question waits for send", arguments: [0.1, 3.0])
+    func tapStops(after: TimeInterval) {
+        let stopped = run([.keyDown(at: t0 + after)], from: .listening)
         let ready = run([.transcribed(hasText: true)], from: stopped.phase)
 
         #expect(stopped.phase == .finishing(thenSend: false))
@@ -86,12 +85,15 @@ struct AskFlowTests {
         #expect(!ready.effects.contains(.submit))
     }
 
-    @Test("a release that beats the hold timer still counts as a hold")
-    func lateHold() {
-        let result = run([.keyDown(at: t0), .keyUp(held: 0.5, at: t0 + 0.5)])
+    @Test("a slow tap that beats the hold timer counts as a tap: the mic never ran")
+    func slowTap() {
+        let closed = run([.keyDown(at: t0), .keyUp(held: 0.5, at: t0 + 0.5)])
+        let typing = run([.keyDown(at: t0), .keyUp(held: 0.5, at: t0 + 0.5)], from: .typing)
 
-        #expect(result.phase == .finishing(thenSend: false))
-        #expect(result.effects == [.startMic, .open, .finishMic])
+        #expect(closed.phase == .typing)
+        #expect(closed.effects == [.openTyping])
+        #expect(typing.phase == .listening)
+        #expect(typing.effects == [.startMic, .showVoice, .chime])
     }
 
     @Test("Return sends what's typed")
@@ -104,7 +106,7 @@ struct AskFlowTests {
 
     @Test("Return while talking finishes the words, then sends them")
     func returnWhileTalking() {
-        let finishing = run(tap + [.send])
+        let finishing = run(tap + tap(at: t0 + 2) + [.send])
         let sent = run([.transcribed(hasText: true)], from: finishing.phase)
 
         #expect(finishing.phase == .finishing(thenSend: true))
@@ -134,7 +136,7 @@ struct AskFlowTests {
         let result = run([.keyDown(at: t0), .otherKey])
 
         #expect(result.phase == .closed)
-        #expect(result.effects == [.startMic, .discardMic, .swallowPress])
+        #expect(result.effects == [.swallowPress])
     }
 
     @Test("Option+letter while typing stays in the box and never touches the mic")
@@ -162,10 +164,10 @@ struct AskFlowTests {
     }
 
     @Test("Esc closes from anywhere, dropping the mic if it was on", arguments: [
-        (AskPhase.pressed(composerOpen: false), true),
+        (AskPhase.pressed(composerOpen: false), false),
         (.pressed(composerOpen: true), false),
         (.holding(composerWasOpen: false), true),
-        (.listening(since: 100), true),
+        (.listening, true),
         (.finishing(thenSend: false), false),
         (.typing, false),
     ])
@@ -195,7 +197,7 @@ struct AskFlowTests {
     }
 
     @Test("the 5-minute limit finishes the words like a release", arguments: [
-        AskPhase.holding(composerWasOpen: false), .listening(since: 100),
+        AskPhase.holding(composerWasOpen: false), .listening,
     ])
     func limitFinishes(phase: AskPhase) {
         let result = run([.micStopped], from: phase)
@@ -227,7 +229,7 @@ struct AskFlowTests {
 
     @Test("losing the mic keeps what was typed")
     func micLost() {
-        let result = run([.micLost], from: .listening(since: 100))
+        let result = run([.micLost], from: .listening)
 
         #expect(result.phase == .typing)
         #expect(result.effects == [.discardMic, .showTyping])

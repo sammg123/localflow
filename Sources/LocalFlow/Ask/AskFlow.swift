@@ -4,13 +4,13 @@ import Foundation
 /// `pressed(composerOpen: false)`.
 enum AskPhase: Equatable {
     case closed
-    /// Key down; the mic is on but nothing new is shown yet, because the press may still
+    /// Key down; nothing new is shown and the mic is off, because the press may still
     /// turn out to be an Option shortcut (Option+arrow, Option+letter).
     case pressed(composerOpen: Bool)
     /// Talking while the key is held.
     case holding(composerWasOpen: Bool)
-    /// Talking hands-free after a tap; `since` is when that tap ended.
-    case listening(since: TimeInterval)
+    /// Talking hands-free after a tap in the typing box.
+    case listening
     /// Mic off, the last words are being written down. Sends once they land if asked to.
     case finishing(thenSend: Bool)
     /// Mic off; the text box is the user's.
@@ -18,9 +18,8 @@ enum AskPhase: Equatable {
 
     var isMicOn: Bool {
         switch self {
-        case .pressed(let open): return !open
         case .holding, .listening: return true
-        case .closed, .finishing, .typing: return false
+        case .closed, .pressed, .finishing, .typing: return false
         }
     }
 
@@ -63,16 +62,15 @@ enum AskEffect: Equatable {
     case showVoice
     case showTyping
     case chime
-    /// Chime once the double-tap window passes, unless a second tap switched to typing.
-    case chimeUnlessDoubleTap
     /// The press was used up on key-down; its release must not count as a tap.
     case swallowPress
     case submit
     case close
 }
 
-/// The Ask key's gestures: tap = talk, double-tap = type, hold = talk while held.
-/// Nothing is sent until Return or the send button. Pure, so every sequence is testable.
+/// The Ask key's gestures: tap = type, tap again = talk (and again = stop), hold = talk
+/// while held. Nothing is sent until Return or the send button. Pure, so every sequence
+/// is testable.
 enum AskFlow {
     static func reduce(_ phase: AskPhase, _ event: AskEvent) -> (AskPhase, [AskEffect]) {
         if event == .cancel {
@@ -81,7 +79,7 @@ enum AskFlow {
         }
         switch phase {
         case .closed:
-            if case .keyDown = event { return (.pressed(composerOpen: false), [.startMic]) }
+            if case .keyDown = event { return (.pressed(composerOpen: false), []) }
             if event == .openTyping { return (.typing, [.openTyping]) }
         case .pressed(let open):
             return pressed(open: open, event) ?? (phase, [])
@@ -96,8 +94,8 @@ enum AskFlow {
                                : (.closed, [.discardMic, .swallowPress, .close])
             default: break
             }
-        case .listening(let since):
-            return listening(since: since, event) ?? (phase, [])
+        case .listening:
+            return listening(event) ?? (phase, [])
         case .finishing(let thenSend):
             switch event {
             case .send: return (.finishing(thenSend: true), [])
@@ -107,7 +105,6 @@ enum AskFlow {
             }
         case .typing:
             switch event {
-            // No mic yet: Right Option+E for é must not flicker it on.
             case .keyDown: return (.pressed(composerOpen: true), [])
             case .send: return (.closed, [.submit])
             default: break
@@ -116,29 +113,25 @@ enum AskFlow {
         return (phase, [])
     }
 
-    /// From the closed window the mic started on key-down, so no speech is lost; from
-    /// the typing box it starts once the press is clearly a tap or a hold.
+    /// The mic starts only once the press is clearly a tap or a hold, so Right Option+E
+    /// for é never flickers it on.
     private static func pressed(open: Bool, _ event: AskEvent) -> (AskPhase, [AskEffect])? {
-        let voiceOn: [AskEffect] = open ? [.startMic, .showVoice] : [.open]
         switch event {
         case .holdReached:
-            return (.holding(composerWasOpen: open), voiceOn + [.chime])
-        case .keyUp(let held, let at):
-            // A release past the threshold is a hold whose timer lost the race.
-            if held >= HotkeyMonitor.tapThreshold { return (.finishing(thenSend: false), voiceOn + [.finishMic]) }
-            return (.listening(since: at), voiceOn + [.chimeUnlessDoubleTap])
+            return (.holding(composerWasOpen: open), [.startMic, open ? .showVoice : .open, .chime])
+        case .keyUp:
+            // Any release before the hold timer is a tap, even a slow one: the mic never ran.
+            return open ? (.listening, [.startMic, .showVoice, .chime]) : (.typing, [.openTyping])
         case .otherKey, .micLost:
-            return open ? (.typing, [.swallowPress]) : (.closed, [.discardMic, .swallowPress])
+            return (open ? .typing : .closed, [.swallowPress])
         default:
             return nil
         }
     }
 
-    private static func listening(since: TimeInterval, _ event: AskEvent) -> (AskPhase, [AskEffect])? {
+    private static func listening(_ event: AskEvent) -> (AskPhase, [AskEffect])? {
         switch event {
-        case .keyDown(let at):
-            // A second tap right after the first: the user wants to type, not talk.
-            if at - since < HotkeyMonitor.doubleTapWindow { return (.typing, [.discardMic, .swallowPress, .showTyping]) }
+        case .keyDown:
             return (.finishing(thenSend: false), [.swallowPress, .finishMic])
         case .micStopped:
             return (.finishing(thenSend: false), [.finishMic])

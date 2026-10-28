@@ -104,7 +104,7 @@ final class AskSession {
         draft = text.isEmpty ? nil : text
     }
 
-    /// Opens the window for typing, as a double-tap does; nothing happens if it's open.
+    /// Opens the window for typing, as a tap does; nothing happens if it's open.
     func openForTyping() {
         if phase == .closed { screen = ScreenCapturer.screenUnderMouse() }
         handle(.openTyping)
@@ -127,20 +127,22 @@ final class AskSession {
     // MARK: - Effects
 
     private func handle(_ event: AskEvent) {
+        let wasOpen = phase.isOpen
         let (next, effects) = AskFlow.reduce(phase, event)
         phase = next
         for effect in effects {
-            guard perform(effect) else { return }
+            guard perform(effect, windowWasOpen: wasOpen) else { return }
         }
     }
 
     /// Returns false when the rest of the effects must not run.
-    private func perform(_ effect: AskEffect) -> Bool {
+    private func perform(_ effect: AskEffect, windowWasOpen: Bool) -> Bool {
         switch effect {
         case .startMic:
             guard mic?.startAsk() == true else {
-                // Busy (a dictation has it) or unavailable: the open window stays for typing.
-                phase = phase.isOpen ? .typing : .closed
+                // Busy (a dictation has it) or unavailable: an open window stays for typing,
+                // and a hold from closed shows nothing.
+                phase = windowWasOpen ? .typing : .closed
                 return false
             }
             voiceID += 1
@@ -164,8 +166,6 @@ final class AskSession {
             composer.model.mode = .typing
         case .chime:
             chime()
-        case .chimeUnlessDoubleTap:
-            chimeAfterDoubleTapWindow()
         case .swallowPress:
             swallowPress()
         case .submit:
@@ -246,15 +246,6 @@ final class AskSession {
             try? await Task.sleep(for: holdDelay)
             guard let self, self.pressID == id, case .pressed = self.phase else { return }
             self.holdReached()
-        }
-    }
-
-    private func chimeAfterDoubleTapWindow() {
-        let id = voiceID
-        Task { [weak self] in
-            try? await Task.sleep(for: .seconds(HotkeyMonitor.doubleTapWindow))
-            guard let self, self.voiceID == id, case .listening = self.phase else { return }
-            self.chime()
         }
     }
 

@@ -240,9 +240,11 @@ struct AskOnScreenTests {
         )
         defer { answers.dismiss() }
 
-        // Tap, talk, Return: the app's real send path, with the run loop running freely.
+        // Tap to type, tap to talk, Return: the app's real send path, with the run loop running freely.
         session.keyDown(at: 0)
         session.keyUp(held: 0.1, at: 0.1)
+        session.keyDown(at: 1)
+        session.keyUp(held: 0.1, at: 1.1)
         await run(0.8)
         session.send()
         await run(1.5)

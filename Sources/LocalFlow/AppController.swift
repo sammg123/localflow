@@ -462,7 +462,7 @@ final class AppController {
         let now = { ProcessInfo.processInfo.systemUptime }
         monitor.onPressBegan = { [weak self] _ in self?.askSession.keyDown(at: now()) }
         monitor.onPressEnded = { [weak self] held in self?.askSession.keyUp(held: held, at: now()) }
-        // The monitor reports a second quick tap as a double-tap; Ask times its own.
+        // The monitor reports a second quick tap as a double-tap; to Ask it's a plain release.
         monitor.onDoubleTap = { [weak self] in self?.askSession.keyUp(held: 0, at: now()) }
         monitor.onKeyDownWhileHeld = { [weak self] in self?.askSession.otherKey() }
         monitor.onEscape = { [weak self] in self?.askEscape(shift: false) }

@@ -116,7 +116,7 @@ struct SettingsView: View {
                      ? "Follow-ups carry nothing from earlier in the chat"
                      : "Follow-ups carry the chat's last \(settings.askMemoryTurns) questions")
             }
-            Text("Tap to ask out loud, double-tap to type, hold to talk while held. Your question shows in the Ask window and nothing is sent until you press Return or the send button. The model picked above reads a screenshot and answers in a bubble; the voice key or ✕ closes it. Every chat is saved on this Mac only, so you can look back through and search them. A chat ends after 30 minutes quiet or when you start a new one.")
+            Text("Tap to type, tap again to talk (and again to stop), or hold to talk while held. Your question shows in the Ask window and nothing is sent until you press Return or the send button. The model picked above reads a screenshot and answers in a bubble; the voice key or ✕ closes it. Every chat is saved on this Mac only, so you can look back through and search them. A chat ends after 30 minutes quiet or when you start a new one.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

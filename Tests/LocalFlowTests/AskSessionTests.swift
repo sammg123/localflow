@@ -108,7 +108,6 @@ struct AskSessionTests {
     func draftSurvivesChats() {
         let (session, _) = makeSession()
         tap(session, at: 0)
-        session.keyDown(at: 0.25) // double-tap: typing
         composer.model.text = "which strategy wins"
 
         session.closeKeepingDraft()
@@ -125,12 +124,15 @@ struct AskSessionTests {
         #expect(composer.model.text.isEmpty)
     }
 
-    @Test("tap, talk, tap: the question waits in the window until Return")
+    @Test("tap to type, tap to talk, tap to stop: the question waits in the window until Return")
     func tapTalkTap() async {
         let (session, _) = makeSession()
 
         tap(session, at: 0)
         #expect(composer.isVisible)
+        #expect(composer.model.mode == .typing)
+        #expect(!mic.isOn)
+        tap(session, at: 1)
         #expect(composer.model.mode == .voice)
         #expect(mic.isOn)
         session.keyDown(at: 3)
@@ -147,15 +149,14 @@ struct AskSessionTests {
         #expect(client.bodies.last?.messages.last?.content.lowercased() == "what's my confidence interval")
     }
 
-    @Test("double-tap types first: the mic's split second is thrown away, not transcribed")
-    func doubleTapTypes() async {
+    @Test("a tap opens for typing without ever turning the mic on")
+    func tapTypes() async {
         let (session, transcriber) = makeSession()
 
         tap(session, at: 0)
-        session.keyDown(at: 0.25)
 
         #expect(composer.model.mode == .typing)
-        #expect(mic.discards == 1)
+        #expect(mic.starts == 0)
         #expect(!mic.isOn)
         composer.model.text = "explain this chart"
         session.send()
@@ -165,12 +166,11 @@ struct AskSessionTests {
         #expect(client.bodies.last?.messages.last?.content == "explain this chart")
     }
 
-    @Test("double-tap, type, then tap to talk: speech lands after the typed words")
+    @Test("tap, type, then tap to talk: speech lands after the typed words")
     func typeThenTalk() async {
         let (session, _) = makeSession(saying: "which strategy dominates")
 
         tap(session, at: 0)
-        session.keyDown(at: 0.25)
         composer.model.text = "In this table,"
         tap(session, at: 2)
         #expect(composer.model.mode == .voice)
@@ -188,8 +188,11 @@ struct AskSessionTests {
 
         session.keyDown(at: 0)
         #expect(!composer.isVisible)
+        #expect(!mic.isOn)
         session.holdReached()
         #expect(composer.isVisible)
+        #expect(composer.model.mode == .voice)
+        #expect(mic.isOn)
         session.keyUp(held: 1.5, at: 1.5)
         await until { composer.model.mode == .typing }
 
@@ -202,6 +205,7 @@ struct AskSessionTests {
         let (session, _) = makeSession()
 
         tap(session, at: 0)
+        tap(session, at: 1)
         session.send()
         await until { surface.model.phase == .done }
 
@@ -215,6 +219,7 @@ struct AskSessionTests {
         let (session, _) = makeSession()
 
         tap(session, at: 0)
+        tap(session, at: 1)
         #expect(indicator.isShowing)
         session.cancel()
         try? await Task.sleep(for: .milliseconds(30))
@@ -235,7 +240,7 @@ struct AskSessionTests {
         session.keyUp(held: 0.1, at: 0.1)
 
         #expect(composer.shows == 0)
-        #expect(mic.discards == 1)
+        #expect(mic.starts == 0)
         #expect(session.phase == .closed)
     }
 
@@ -243,7 +248,6 @@ struct AskSessionTests {
     func shortcutKeepsAnswer() async {
         let (session, _) = makeSession()
         tap(session, at: 0)
-        session.keyDown(at: 0.25)
         composer.model.text = "first"
         session.send()
         await until { surface.model.phase == .done }
@@ -259,7 +263,6 @@ struct AskSessionTests {
     func accentWhileTyping() {
         let (session, _) = makeSession()
         tap(session, at: 0)
-        session.keyDown(at: 0.25)
         let starts = mic.starts
 
         session.keyDown(at: 3)
@@ -280,12 +283,27 @@ struct AskSessionTests {
         #expect(session.phase == .closed)
     }
 
-    @Test("while a dictation has the mic, the Ask key does nothing")
-    func micBusy() {
+    @Test("while a dictation has the mic, a tap still opens for typing and the voice stays off")
+    func micBusyTyping() {
         mic.canStart = false
         let (session, _) = makeSession()
 
         tap(session, at: 0)
+        tap(session, at: 1)
+
+        #expect(composer.shows == 1)
+        #expect(composer.model.mode == .typing)
+        #expect(session.phase == .typing)
+    }
+
+    @Test("while a dictation has the mic, holding the key shows nothing")
+    func micBusyHold() {
+        mic.canStart = false
+        let (session, _) = makeSession()
+
+        session.keyDown(at: 0)
+        session.holdReached()
+        session.keyUp(held: 1.5, at: 1.5)
 
         #expect(composer.shows == 0)
         #expect(session.phase == .closed)
@@ -296,7 +314,6 @@ struct AskSessionTests {
         let (session, _) = makeSession()
 
         tap(session, at: 0)
-        session.keyDown(at: 0.25)
         session.send()
         try? await Task.sleep(for: .milliseconds(30))
 
@@ -310,7 +327,6 @@ struct AskSessionTests {
         let (session, _) = makeSession()
 
         tap(session, at: 0)
-        session.keyDown(at: 0.25)
         composer.model.text = String(repeating: "x", count: AskLimits.maxQuestionLength + 500)
         session.send()
         await until { !client.bodies.isEmpty }
@@ -333,7 +349,6 @@ struct AskSessionTests {
     func tapReplacesAnswer() async {
         let (session, _) = makeSession()
         tap(session, at: 0)
-        session.keyDown(at: 0.25)
         composer.model.text = "first"
         session.send()
         await until { surface.model.phase == .done }

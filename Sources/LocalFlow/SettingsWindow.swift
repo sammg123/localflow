@@ -120,6 +120,12 @@ struct SettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
+            TextField("Agent model:", text: $settings.agentModel, prompt: Text(Settings.defaultAgentModel))
+            if settings.askEngine != .claude { ClaudeAccountRow() }
+            Text("Do it (or ⌘Return) in the Ask window hands the task to an agent that uses your Mac: it runs Terminal commands, reads and edits your files, and clicks and types in apps. Looking, reading and safe commands just run; anything that deletes, sends, buys, pushes, installs or uses sudo waits for your OK. It works on your Claude plan through LocalFlow's own Claude sign-in, so screenshots and what it reads go to Anthropic.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
             Divider()
 
             Picker("Speech engine:", selection: $settings.engine) {

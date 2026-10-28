@@ -1,13 +1,13 @@
 import AppKit
 import SwiftUI
 
-/// The blue outline around the screen while Ask is listening and looking.
-/// Click-through and above everything, on the one display being captured.
+/// The outline around the screen: blue while Ask is listening and looking, green while
+/// the agent is using the Mac. Click-through and above everything, on the one display.
 @MainActor
 final class ScreenGlow {
     private let panel: NSPanel
 
-    init() {
+    init(color: Color = AnswerView.askBlue) {
         panel = NSPanel(
             contentRect: .zero,
             styleMask: [.borderless, .nonactivatingPanel],
@@ -22,7 +22,7 @@ final class ScreenGlow {
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        let hosting = NSHostingView(rootView: GlowView(pulses: !reduceMotion))
+        let hosting = NSHostingView(rootView: GlowView(color: color, pulses: !reduceMotion))
         hosting.sizingOptions = [] // always exactly the screen's frame
         panel.contentView = hosting
     }
@@ -60,6 +60,7 @@ final class ScreenGlow {
 }
 
 struct GlowView: View {
+    var color = AnswerView.askBlue
     var pulses: Bool
     @State private var bright = false
 
@@ -69,10 +70,10 @@ struct GlowView: View {
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
-                .strokeBorder(AnswerView.askBlue.opacity(0.55), lineWidth: 18)
+                .strokeBorder(color.opacity(0.55), lineWidth: 18)
                 .blur(radius: 16)
             RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
-                .strokeBorder(AnswerView.askBlue, lineWidth: 3)
+                .strokeBorder(color, lineWidth: 3)
         }
         .opacity(bright || !pulses ? 1 : 0.6)
         .allowsHitTesting(false)

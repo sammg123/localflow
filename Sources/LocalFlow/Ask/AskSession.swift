@@ -12,6 +12,12 @@ protocol AskMicrophone: AnyObject {
     func samples(in range: Range<Int>) -> [Float]
 }
 
+/// Where the finished words go: a question about the screen, or a task for the agent.
+enum AskSendTarget: Equatable {
+    case question
+    case agent
+}
+
 /// Runs the Ask window: turns Right Option presses into AskFlow events and carries out
 /// the effects (mic, live words, the window, sending to AskController).
 @MainActor
@@ -22,6 +28,8 @@ final class AskSession {
         didSet { if phase != oldValue { onPhaseChange?(phase) } }
     }
     var onPhaseChange: ((AskPhase) -> Void)?
+    /// Do it (Cmd+Return): the words go to the agent, with the screen they were written on.
+    var onTask: ((String, NSScreen?) -> Void)?
     var keyName = "Right ⌥" {
         didSet { composer.model.keyName = keyName }
     }
@@ -39,6 +47,8 @@ final class AskSession {
     private let settings = Settings.shared
 
     private var screen: NSScreen?
+    /// Where the next send goes; set by each send, back to a question when the window opens.
+    private var target: AskSendTarget = .question
     /// Words written before going to Chats, put back when the window opens for typing.
     private var draft: String?
     /// Typed text the current voice turn adds to.
@@ -75,6 +85,7 @@ final class AskSession {
         self.holdDelay = holdDelay
         self.liveInterval = liveInterval
         composer.onSend = { [weak self] in self?.send() }
+        composer.onSendToAgent = { [weak self] in self?.send(to: .agent) }
         composer.onCancel = { [weak self] in self?.cancel() }
     }
 
@@ -110,12 +121,14 @@ final class AskSession {
         handle(.openTyping)
     }
 
-    /// Return or the send button. An empty box sends nothing.
-    func send() {
+    /// Return or the send button asks; Cmd+Return or Do it hands the words to the agent.
+    /// An empty box sends nothing.
+    func send(to target: AskSendTarget = .question) {
         if phase == .typing, composer.model.question.isEmpty {
             NSSound.beep()
             return
         }
+        self.target = target
         handle(.send)
     }
 
@@ -186,6 +199,7 @@ final class AskSession {
             return false
         }
         answers.prepare(on: screen) // closes the last answer
+        target = .question
         typedBase = ""
         composer.model.reset(mode: mode)
         if mode == .typing, let draft { composer.model.text = draft }
@@ -197,9 +211,15 @@ final class AskSession {
     }
 
     private func submit() {
-        let question = String(composer.model.question.prefix(AskLimits.maxQuestionLength))
+        let words = String(composer.model.question.prefix(AskLimits.maxQuestionLength))
         composer.hide()
-        answers.submit(question)
+        switch target {
+        case .question:
+            answers.submit(words)
+        case .agent:
+            answers.cancelPreparing()
+            onTask?(words, screen)
+        }
     }
 
     private func finishMic() {

@@ -1,12 +1,13 @@
 import SwiftUI
 
 /// The Ask window: blue dot and waveform while talking, an editable box while typing,
-/// and a send button. Same size, colors and spot as the live dictation window.
+/// a send button to ask, and Do it to hand the words to the agent. Same size, colors and spot as the live dictation window.
 struct AskComposerView: View {
     static let size = NSSize(width: 460, height: 210)
 
     @ObservedObject var model: ComposerModel
     var onSend: () -> Void = {}
+    var onDoIt: () -> Void = {}
     var onOpenChats: () -> Void = {}
     var onClose: () -> Void = {}
     @FocusState private var boxFocused: Bool
@@ -14,7 +15,7 @@ struct AskComposerView: View {
 
     private let primary = Color(red: 0.96, green: 0.96, blue: 0.97)   // #f5f5f7
     private let secondary = Color(red: 0.63, green: 0.63, blue: 0.65) // #a1a1a6
-    private static let placeholder = "Ask about your screen…"
+    private static let placeholder = "Ask about your screen, or say what to do…"
     /// Room above the first line where overflowing words fade out while talking.
     private static let fadeHeight: CGFloat = 16
 
@@ -117,6 +118,19 @@ struct AskComposerView: View {
                     .foregroundStyle(secondary.opacity(0.8))
             }
             Spacer(minLength: 0)
+            Button(action: onDoIt) {
+                Text("Do it")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .frame(height: 28)
+                    .background(Capsule().fill(model.canSend ? AgentStyle.green : Color.white.opacity(0.15)))
+            }
+            .buttonStyle(.plain)
+            .disabled(!model.canSend)
+            .accessibilityLabel("Do it")
+            .accessibilityHint("Hands this to the agent, which can use your Mac to do it")
+            .help("Hand it to the agent (⌘Return)")
             Button(action: onSend) {
                 Image(systemName: "arrow.up")
                     .font(.system(size: 13, weight: .bold))

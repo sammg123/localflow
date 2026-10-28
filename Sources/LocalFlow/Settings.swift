@@ -189,7 +189,19 @@ final class Settings: ObservableObject {
         didSet { defaults.set(askClaudeModel, forKey: "askClaudeModel") }
     }
 
+    /// Claude model the agent (Do it) works with. The agent always runs on Claude.
+    @Published var agentModel: String {
+        didSet { defaults.set(agentModel, forKey: "agentModel") }
+    }
+
     static let defaultAskModel = AskEngine.local.defaultModel
+    static let defaultAgentModel = "claude-opus-5-5"
+
+    /// The agent's model, falling back to the default if the field was cleared.
+    var effectiveAgentModel: String {
+        let trimmed = agentModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? Self.defaultAgentModel : trimmed
+    }
 
     /// The model to send for the chosen engine, falling back to its default if the field
     /// was cleared.
@@ -223,5 +235,6 @@ final class Settings: ObservableObject {
         askCloudModel = defaults.string(forKey: "askCloudModel") ?? AskEngine.chatGPT.defaultModel
         askClaudeModel = defaults.string(forKey: "askClaudeModel") ?? AskEngine.claude.defaultModel
         askMemoryTurns = defaults.object(forKey: "askMemoryTurns") as? Int ?? 5
+        agentModel = defaults.string(forKey: "agentModel") ?? Self.defaultAgentModel
     }
 }

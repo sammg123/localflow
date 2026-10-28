@@ -39,6 +39,7 @@ final class FakeMic: AskMicrophone {
 final class FakeComposer: ComposerSurface {
     let model = ComposerModel()
     var onSend: (() -> Void)?
+    var onSendToAgent: (() -> Void)?
     var onCancel: (() -> Void)?
     private(set) var isVisible = false
     private(set) var shows = 0
@@ -357,5 +358,74 @@ struct AskSessionTests {
 
         #expect(!surface.isVisible)
         #expect(composer.isVisible)
+    }
+
+    @Test("Do it hands the typed words to the agent, not to Ask, and closes the window")
+    func doItTyped() async {
+        let (session, _) = makeSession()
+        var tasks: [String] = []
+        session.onTask = { task, _ in tasks.append(task) }
+        tap(session, at: 0)
+        composer.model.text = "  rename the screenshots on my desktop  "
+
+        composer.onSendToAgent?()
+
+        #expect(tasks == ["rename the screenshots on my desktop"])
+        #expect(!composer.isVisible)
+        #expect(session.phase == .closed)
+        #expect(!surface.isVisible)
+        #expect(!indicator.isShowing)
+        try? await Task.sleep(for: .milliseconds(50))
+        #expect(client.bodies.isEmpty)
+    }
+
+    @Test("Do it while talking finishes the words first, then hands them to the agent")
+    func doItWhileTalking() async {
+        let (session, _) = makeSession(saying: "clean up my downloads")
+        var tasks: [String] = []
+        session.onTask = { task, _ in tasks.append(task) }
+        tap(session, at: 0)
+        tap(session, at: 1)
+        #expect(mic.isOn)
+
+        session.send(to: .agent)
+        await until { !tasks.isEmpty }
+
+        #expect(tasks.count == 1)
+        #expect(tasks.first?.lowercased().contains("clean up my downloads") == true)
+        #expect(!composer.isVisible)
+        #expect(client.bodies.isEmpty)
+    }
+
+    @Test("Do it with an empty box hands nothing over and keeps the window open")
+    func doItEmpty() {
+        let (session, _) = makeSession()
+        var tasks: [String] = []
+        session.onTask = { task, _ in tasks.append(task) }
+        tap(session, at: 0)
+
+        session.send(to: .agent)
+
+        #expect(tasks.isEmpty)
+        #expect(composer.isVisible)
+        #expect(session.phase == .typing)
+    }
+
+    @Test("after a Do it, the next Return asks a question again")
+    func doItDoesNotStick() async {
+        let (session, _) = makeSession()
+        var tasks: [String] = []
+        session.onTask = { task, _ in tasks.append(task) }
+        tap(session, at: 0)
+        composer.model.text = "open my calendar"
+        session.send(to: .agent)
+
+        tap(session, at: 10)
+        composer.model.text = "what's on screen"
+        session.send()
+        await until { !client.bodies.isEmpty }
+
+        #expect(tasks == ["open my calendar"])
+        #expect(client.bodies.count == 1)
     }
 }

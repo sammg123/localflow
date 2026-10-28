@@ -14,6 +14,7 @@ private final class ComposerWindow: NSPanel {
 class ComposerPanel: ComposerSurface {
     let model = ComposerModel()
     var onSend: (() -> Void)?
+    var onSendToAgent: (() -> Void)?
     var onCancel: (() -> Void)?
 
     /// How long after showing the window it's checked for having reached the screen.
@@ -147,8 +148,9 @@ class ComposerPanel: ComposerSurface {
                        display: false)
     }
 
-    /// Return sends, Esc cancels, and the edit shortcuts work. (LocalFlow has no Edit
-    /// menu, which is what normally routes Cmd+V and friends to a text field.)
+    /// Return sends (Cmd+Return to the agent, where there is one), Esc cancels, and the
+    /// edit shortcuts work. (LocalFlow has no Edit menu, which is what normally routes
+    /// Cmd+V and friends to a text field.)
     private func installKeyMonitor() {
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -172,7 +174,11 @@ class ComposerPanel: ComposerSurface {
             // (Japanese, Chinese) confirms the characters instead of sending.
             let composing = (panel.firstResponder as? NSTextView)?.hasMarkedText() == true
             guard !flags.contains(.shift), !composing else { return false }
-            onSend?()
+            if flags.contains(.command), let onSendToAgent {
+                onSendToAgent()
+            } else {
+                onSend?()
+            }
             return true
         case kVK_Escape:
             onCancel?()

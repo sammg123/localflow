@@ -213,7 +213,8 @@ struct AskRenderTests {
         #expect(model.hint.contains("Right ⌥ to stop"))
         model.mode = .typing
         #expect(model.hint.contains("Right ⌥ to talk"))
-        #expect(model.hint.contains("Return to send"))
+        #expect(model.hint.contains("Return to ask"))
+        #expect(model.hint.contains("⌘Return to do it"))
     }
 
     @Test("send is off only when there's nothing to send")

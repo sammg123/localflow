@@ -73,6 +73,7 @@ final class AskComposerPanel: ComposerPanel {
     init() {
         super.init(size: AskComposerView.size)
         setContent(AskComposerView(model: model, onSend: { [weak self] in self?.onSend?() },
-                                   onOpenChats: { [weak self] in self?.onOpenChats?() }))
+                                   onOpenChats: { [weak self] in self?.onOpenChats?() },
+                                   onClose: { [weak self] in self?.onCancel?() }))
     }
 }

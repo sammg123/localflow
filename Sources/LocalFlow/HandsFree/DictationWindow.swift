@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The hands-free window, where the pill appears: words show up while you talk, a tap
@@ -6,7 +7,18 @@ import SwiftUI
 final class DictationComposerPanel: ComposerPanel {
     init() {
         super.init(size: DictationComposerView.size)
-        setContent(DictationComposerView(model: model, onPaste: { [weak self] in self?.onSend?() }))
+        setContent(DictationComposerView(model: model,
+                                         onPaste: { [weak self] in self?.onSend?() },
+                                         onCopy: { [weak self] in self?.copyText() },
+                                         onClose: { [weak self] in self?.onCancel?() }))
+    }
+
+    /// The words as they are right now, live ones included, onto the clipboard.
+    private func copyText() {
+        let text = model.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 }
 
@@ -15,6 +27,8 @@ struct DictationComposerView: View {
 
     @ObservedObject var model: ComposerModel
     var onPaste: () -> Void = {}
+    var onCopy: () -> Void = {}
+    var onClose: () -> Void = {}
     @FocusState private var boxFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -74,6 +88,10 @@ struct DictationComposerView: View {
             case .finishing: ProgressView().controlSize(.small)
             case .typing: EmptyView()
             }
+            if !model.text.isEmpty {
+                CopyIconButton(action: onCopy)
+            }
+            WindowIconButton(symbol: "xmark", label: "Close", help: "Close (Esc)", action: onClose)
         }
         .frame(height: 22)
     }

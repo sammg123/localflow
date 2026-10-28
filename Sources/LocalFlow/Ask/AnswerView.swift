@@ -80,7 +80,6 @@ struct AnswerView: View {
     var onClose: () -> Void = {}
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var copied = false
 
     static let primary = Color(red: 0.96, green: 0.96, blue: 0.97)   // #f5f5f7
     static let secondary = Color(red: 0.63, green: 0.63, blue: 0.65) // #a1a1a6
@@ -120,14 +119,7 @@ struct AnswerView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             iconButton("clock.arrow.circlepath", label: "Chats", help: "All your chats", action: onOpenChats)
             if model.phase == .done {
-                iconButton(copied ? "checkmark" : "doc.on.doc", label: "Copy answer") {
-                    onCopy()
-                    copied = true
-                    Task { @MainActor in
-                        try? await Task.sleep(for: .seconds(1.5))
-                        copied = false
-                    }
-                }
+                CopyIconButton(label: "Copy answer", action: onCopy)
             }
             iconButton("minus", label: "Minimize", help: "Minimize (Esc)", action: onMinimize)
             iconButton("xmark", label: "Close", help: "Close (⇧Esc)", action: onClose)
@@ -214,17 +206,7 @@ struct AnswerView: View {
     }
 
     private func iconButton(_ symbol: String, label: String, help: String? = nil, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(Self.primary.opacity(0.85))
-                .frame(width: 22, height: 22)
-                .background(Circle().fill(Color.white.opacity(0.1)))
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
-        .help(help ?? label)
+        WindowIconButton(symbol: symbol, label: label, help: help, action: action)
     }
 
     /// **bold**, *italic* and `code` from the model; anything else shows as typed.

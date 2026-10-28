@@ -12,7 +12,7 @@ final class AskChatStore: ObservableObject {
     /// Off when the file is there but couldn't be read: saving would wipe it.
     private let canSave: Bool
     /// Saves happen off the main thread, in order.
-    private let writer = DispatchQueue(label: "io.github.sammg123.localflow.ask-chats", qos: .utility)
+    private let writer = DispatchQueue(label: "LocalFlow.ask-chats", qos: .utility)
 
     static var defaultURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]

@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 /// The Ask Chats window: an ordinary window, so it takes the keyboard for searching and
-/// stays put while you reads.
+/// stays put while you read.
 @MainActor
 final class AskHistoryWindowController {
     private let store: AskChatStore
@@ -20,7 +20,7 @@ final class AskHistoryWindowController {
     var contentView: NSView? { window?.contentView }
 
     /// Opens on the current chat, or the newest one. (Tests pass `activating: false` so
-    /// the window never takes the keyboard from the app you is using.)
+    /// the window never takes the keyboard from the app you're using.)
     func show(activating: Bool = true) {
         let window = self.window ?? makeWindow()
         self.window = window

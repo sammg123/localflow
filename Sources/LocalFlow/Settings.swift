@@ -29,6 +29,30 @@ enum HotkeyChoice: String, CaseIterable, Identifiable {
     }
 }
 
+/// Which model answers Ask.
+enum AskEngine: String, CaseIterable, Identifiable {
+    /// A vision model in Ollama on this Mac. Nothing leaves it.
+    case local
+    /// ChatGPT on the user's own plan, through the Codex tool in the ChatGPT app.
+    case chatGPT
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .local: return "Local model (Ollama)"
+        case .chatGPT: return "ChatGPT (your subscription)"
+        }
+    }
+
+    var defaultModel: String {
+        switch self {
+        case .local: return "qwen3.5:9b"
+        case .chatGPT: return "gpt-6-sol"
+        }
+    }
+}
+
 /// The key held to ask a question about the screen. Separate from the dictation key.
 enum AskKeyChoice: String, CaseIterable, Identifiable {
     case rightOption
@@ -144,17 +168,26 @@ final class Settings: ObservableObject {
     @Published var askMemoryTurns: Int {
         didSet { defaults.set(askMemoryTurns, forKey: "askMemoryTurns") }
     }
+    @Published var askEngine: AskEngine {
+        didSet { defaults.set(askEngine.rawValue, forKey: "askEngine") }
+    }
     /// Ollama model tag Ask uses. Must be a vision model.
     @Published var askModel: String {
         didSet { defaults.set(askModel, forKey: "askModel") }
     }
+    /// ChatGPT model Ask uses when it answers through ChatGPT.
+    @Published var askCloudModel: String {
+        didSet { defaults.set(askCloudModel, forKey: "askCloudModel") }
+    }
 
-    static let defaultAskModel = "qwen3.5:9b"
+    static let defaultAskModel = AskEngine.local.defaultModel
 
-    /// The model tag to send, falling back to the default if the field was cleared.
+    /// The model to send for the chosen engine, falling back to its default if the field
+    /// was cleared.
     var effectiveAskModel: String {
-        let trimmed = askModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? Self.defaultAskModel : trimmed
+        let typed = askEngine == .chatGPT ? askCloudModel : askModel
+        let trimmed = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? askEngine.defaultModel : trimmed
     }
 
     private init() {
@@ -171,7 +204,9 @@ final class Settings: ObservableObject {
         saveHistoryToDisk = defaults.object(forKey: "saveHistoryToDisk") as? Bool ?? false
         liveWindowOnDoubleTap = defaults.object(forKey: "liveWindowOnDoubleTap") as? Bool ?? true
         askKey = AskKeyChoice(rawValue: defaults.string(forKey: "askKey") ?? "") ?? .rightOption
+        askEngine = AskEngine(rawValue: defaults.string(forKey: "askEngine") ?? "") ?? .local
         askModel = defaults.string(forKey: "askModel") ?? Self.defaultAskModel
+        askCloudModel = defaults.string(forKey: "askCloudModel") ?? AskEngine.chatGPT.defaultModel
         askMemoryTurns = defaults.object(forKey: "askMemoryTurns") as? Int ?? 5
     }
 }

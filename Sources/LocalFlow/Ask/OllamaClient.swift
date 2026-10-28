@@ -118,6 +118,10 @@ enum AskError: Error, Equatable {
     case ollama(String)
     case timedOut
     case screenCaptureFailed(String)
+    /// The Codex tool (for ChatGPT answers) isn't on this Mac.
+    case chatGPTMissing
+    case chatGPTSignedOut
+    case chatGPT(String)
 
     /// The kind of failure, for the log. Never the text inside it, which can echo what
     /// the user asked.
@@ -128,6 +132,9 @@ enum AskError: Error, Equatable {
         case .ollama: return "ollama"
         case .timedOut: return "timedOut"
         case .screenCaptureFailed: return "screenCaptureFailed"
+        case .chatGPTMissing: return "chatGPTMissing"
+        case .chatGPTSignedOut: return "chatGPTSignedOut"
+        case .chatGPT: return "chatGPT"
         }
     }
 
@@ -144,6 +151,13 @@ enum AskError: Error, Equatable {
             return "The model took too long to answer. Ask again in a moment."
         case .screenCaptureFailed(let detail):
             return "Couldn't capture the screen: \(detail)"
+        case .chatGPTMissing:
+            return "ChatGPT answers use the Codex tool that comes with the ChatGPT app, and it isn't on this Mac. "
+                + "Install the ChatGPT app, or switch Ask to the local model in Settings."
+        case .chatGPTSignedOut:
+            return "Codex isn't signed in to your ChatGPT account. Open the ChatGPT app, sign in to Codex, then ask again."
+        case .chatGPT(let detail):
+            return "ChatGPT failed: \(detail)"
         }
     }
 

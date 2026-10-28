@@ -39,7 +39,15 @@ extension ScreenGlow: ListeningIndicator {}
 final class AskController {
     typealias ScreenCapture = @MainActor (NSScreen?) async throws -> Data
 
-    private let client: AskModelClient
+    /// Set in tests; otherwise the engine picked in Settings answers.
+    private let fixedClient: AskModelClient?
+    private var client: AskModelClient {
+        if let fixedClient { return fixedClient }
+        switch settings.askEngine {
+        case .local: return OllamaClient()
+        case .chatGPT: return CodexClient(model: settings.effectiveAskModel)
+        }
+    }
     private let answerPanel: AnswerSurface
     private let glow: ListeningIndicator
     private let captureScreen: ScreenCapture
@@ -64,14 +72,14 @@ final class AskController {
     /// Bumped by every dismiss/submit so a cancelled run can never touch a newer bubble.
     private var generation = 0
 
-    init(client: AskModelClient = OllamaClient(),
+    init(client: AskModelClient? = nil,
          surface: AnswerSurface? = nil,
          indicator: ListeningIndicator? = nil,
          capture: @escaping ScreenCapture = AskController.captureDisplay,
          memoryLimit: @escaping @MainActor () -> Int = { Settings.shared.askMemoryTurns },
          chats: AskChatStore? = nil,
          closeHint: String) {
-        self.client = client
+        fixedClient = client
         self.memoryLimit = memoryLimit
         self.chats = chats ?? AskChatStore(fileURL: nil)
         answerPanel = surface ?? AnswerPanel(closeHint: closeHint)

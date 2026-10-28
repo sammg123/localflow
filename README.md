@@ -27,7 +27,7 @@ release ──► rule cleanup (fillers, replacements, spoken commands)
 | Double-tap hotkey | Hands-free window: words appear as you talk |
 | Tap hotkey (hands-free) | Pause: the words are written down in the window, editable with the keyboard. Tap again to keep talking (new words go after your edits); hold to talk while held |
 | Return or the ⏎ button (hands-free) | Paste the window's text into the app you were in. Shift+Return = new line |
-| Esc (hands-free) | Throw it away |
+| Esc or ✕ (hands-free) | Throw it away. The copy button next to ✕ copies what's in the window first |
 | **Ctrl + hotkey** (tap) | Paste the last transcript again (your clipboard is untouched) |
 | **Ctrl + hotkey** (hold) | Command mode: select text first, then speak an edit ("make this shorter", "turn into bullets") — the selection is replaced |
 | Esc while recording | Cancel |
@@ -35,7 +35,7 @@ release ──► rule cleanup (fillers, replacements, spoken commands)
 | Tap **Right ⌥** (Ask key) | Ask window opens listening; your words appear as you talk. Tap again to stop |
 | Double-tap **Right ⌥** | Ask window opens for typing (mic off). Tap Right ⌥ to add speech |
 | Hold **Right ⌥** | Talk while held; the words land in the Ask window |
-| Return or the send button | Send the question (nothing is sent before this). Shift+Return = new line, Esc = cancel |
+| Return or the send button | Send the question (nothing is sent before this). Shift+Return = new line, Esc or ✕ = cancel |
 | Esc, or click **–** on the answer | Tuck it into a chip in the bottom-right corner (the answer keeps coming). Esc again or a click on the chip brings it back |
 | **Shift+Esc**, Fn, or click ✕ | Close the answer (also cancels one still coming), from the bubble or the chip. Fn leaves a tucked answer alone. Right ⌥ closes it and starts a new question |
 
@@ -52,6 +52,7 @@ Notes:
 
 Tap the Ask key (Right ⌥ by default, Settings → General) to talk, or double-tap it to type. The question builds up in the Ask window, editable, and is sent only when you press Return or the send button. Then LocalFlow screenshots the display under your pointer (leaving its own windows and outline out) and sends both to a local vision model in [Ollama](https://ollama.com) at 127.0.0.1. Blue dots and "Thinking" show until the first word arrives, with a seconds count once it's been a few seconds. The answer streams into a bubble with copy, – and ✕ buttons. A new answer floats over everything, so the app you were in can't cover it before you've seen it. Once you click somewhere else it sits with your ordinary windows: click any app and it comes in front, click the bubble and it comes back. If another window covers it completely, it tucks itself into the corner chip. The blue screen outline shows only while Ask is looking: while you write the question, and from Send until the first word (not over an answer, not while tucked away).
 
+- **ChatGPT instead (optional):** Settings → General → **Ask answers with: ChatGPT (your subscription)**. Ask then runs the Codex tool that ships inside the ChatGPT app, signed in with your ChatGPT account, so answers come out of your ChatGPT plan with no API key. It runs isolated from your own Codex setup (no config, hooks, MCP servers or rules), saves nothing to your Codex history, and uses a read-only sandbox in an empty folder that's deleted, screenshot included, after each answer. Default model `gpt-6-sol`, low reasoning effort. **This sends the screenshot and your question to OpenAI**; dictation stays on your Mac either way. The answer arrives whole rather than word by word.
 - **Model:** `qwen3.5:9b` (6.6 GB download, about 6.4 GB in memory). Picked after testing the vision models on this M4 Max against real screenshots: it was the only small one that read every number correctly. `ollama pull qwen3.5:9b` once; change the tag in Settings.
 - **Memory:** the model starts loading when the Ask window opens (so it loads while you talk or type) and unloads 5 minutes after the last answer.
 - **Speed (M4 Max, 36 GB):** about 5 s from release to a full answer with the model warm, 12-13 s from cold.

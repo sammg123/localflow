@@ -91,13 +91,25 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.orange)
             }
-            TextField("Ask model:", text: $settings.askModel, prompt: Text(Settings.defaultAskModel))
+            Picker("Ask answers with:", selection: $settings.askEngine) {
+                ForEach(AskEngine.allCases) { engine in
+                    Text(engine.label).tag(engine)
+                }
+            }
+            if settings.askEngine == .chatGPT {
+                TextField("ChatGPT model:", text: $settings.askCloudModel, prompt: Text(AskEngine.chatGPT.defaultModel))
+                Text("Sends the screenshot and your question to OpenAI on your ChatGPT plan, through the Codex tool in the ChatGPT app (signed in with your ChatGPT account). Dictation still stays on this Mac.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                TextField("Ask model:", text: $settings.askModel, prompt: Text(Settings.defaultAskModel))
+            }
             Stepper(value: $settings.askMemoryTurns, in: 0...20) {
                 Text(settings.askMemoryTurns == 0
                      ? "Follow-ups carry nothing from earlier in the chat"
                      : "Follow-ups carry the chat's last \(settings.askMemoryTurns) questions")
             }
-            Text("Tap to ask out loud, double-tap to type, hold to talk while held. Your question shows in the Ask window and nothing is sent until you press Return or the send button. A local vision model in Ollama reads a screenshot and answers in a bubble; the voice key or ✕ closes it. Every chat is saved on this Mac only, so you can look back through and search them. A chat ends after 30 minutes quiet or when you start a new one.")
+            Text("Tap to ask out loud, double-tap to type, hold to talk while held. Your question shows in the Ask window and nothing is sent until you press Return or the send button. The model picked above reads a screenshot and answers in a bubble; the voice key or ✕ closes it. Every chat is saved on this Mac only, so you can look back through and search them. A chat ends after 30 minutes quiet or when you start a new one.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

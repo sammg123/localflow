@@ -48,7 +48,7 @@ struct CodexClientTests {
 
     @Test("the prompt carries the instructions, the chat so far and the question")
     func prompt() {
-        let prompt = CodexPrompt.make(from: body)
+        let prompt = AskToolPrompt.make(from: body)
         #expect(prompt.contains("screenshot of the user's screen"))
         #expect(prompt.contains("Do not run commands"))
         #expect(prompt.contains("which is biggest?"))
@@ -59,7 +59,7 @@ struct CodexClientTests {
     @Test("a first question has no earlier-chat section")
     func promptWithoutHistory() {
         let fresh = OllamaChatBody.ask(model: "m", question: "what is this?", imageBase64: "")
-        #expect(!CodexPrompt.make(from: fresh).contains("Earlier in this chat"))
+        #expect(!AskToolPrompt.make(from: fresh).contains("Earlier in this chat"))
     }
 
     @Test("runs isolated: no user config, no saved session, read-only, the model, the image")
@@ -164,11 +164,11 @@ struct CodexClientTests {
 
     @Test("a model name that could read as a flag is refused before anything runs")
     func modelName() async throws {
-        #expect(CodexInvocation.isValidModel("gpt-6-sol"))
-        #expect(CodexInvocation.isValidModel("gpt-5.5:latest"))
-        #expect(!CodexInvocation.isValidModel("--dangerously-bypass-approvals-and-sandbox"))
-        #expect(!CodexInvocation.isValidModel("gpt 6"))
-        #expect(!CodexInvocation.isValidModel(""))
+        #expect(AskTool.isValidModel("gpt-6-sol"))
+        #expect(AskTool.isValidModel("gpt-5.5:latest"))
+        #expect(!AskTool.isValidModel("--dangerously-bypass-approvals-and-sandbox"))
+        #expect(!AskTool.isValidModel("gpt 6"))
+        #expect(!AskTool.isValidModel(""))
         let fake = try fakeCodex()
         await #expect(throws: AskError.chatGPT("the model name in Settings (-x) isn't valid")) {
             try await collect(CodexClient(executable: fake.path, model: "-x"))
@@ -196,7 +196,7 @@ struct CodexClientTests {
         try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -3_600)], ofItemAtPath: old.path)
         try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -3_600)], ofItemAtPath: other.path)
 
-        CodexClient.removeLeftovers(in: folder)
+        AskTool.removeLeftovers(in: folder)
 
         #expect(!FileManager.default.fileExists(atPath: old.path))
         #expect(FileManager.default.fileExists(atPath: fresh.path))

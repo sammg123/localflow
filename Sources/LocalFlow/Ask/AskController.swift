@@ -46,6 +46,7 @@ final class AskController {
         switch settings.askEngine {
         case .local: return OllamaClient()
         case .chatGPT: return CodexClient(model: settings.effectiveAskModel)
+        case .claude: return ClaudeClient(model: settings.effectiveAskModel)
         }
     }
     private let answerPanel: AnswerSurface

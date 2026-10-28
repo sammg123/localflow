@@ -125,6 +125,11 @@ enum AskError: Error, Equatable {
     /// command-line tool, which is how Ask reaches it. Only its admin can change that.
     case chatGPTWorkspaceBlocked
     case chatGPT(String)
+    /// Claude Code (for Claude answers) isn't on this Mac.
+    case claudeMissing
+    /// LocalFlow's own Claude sign-in isn't signed in.
+    case claudeSignedOut
+    case claude(String)
 
     /// The kind of failure, for the log. Never the text inside it, which can echo what
     /// the user asked.
@@ -139,6 +144,9 @@ enum AskError: Error, Equatable {
         case .chatGPTSignedOut: return "chatGPTSignedOut"
         case .chatGPTWorkspaceBlocked: return "chatGPTWorkspaceBlocked"
         case .chatGPT: return "chatGPT"
+        case .claudeMissing: return "claudeMissing"
+        case .claudeSignedOut: return "claudeSignedOut"
+        case .claude: return "claude"
         }
     }
 
@@ -165,6 +173,13 @@ enum AskError: Error, Equatable {
                 + "Switch Ask to the local model in Settings, or sign Codex in with a personal ChatGPT plan."
         case .chatGPT(let detail):
             return "ChatGPT failed: \(detail)"
+        case .claudeMissing:
+            return "Claude answers use Claude Code, and it isn't on this Mac. "
+                + "Install Claude Code, or switch Ask to the local model in Settings."
+        case .claudeSignedOut:
+            return "Ask isn't signed in to Claude yet. Open LocalFlow Settings, click Sign in to Claude, then ask again."
+        case .claude(let detail):
+            return "Claude failed: \(detail)"
         }
     }
 

@@ -96,13 +96,20 @@ struct SettingsView: View {
                     Text(engine.label).tag(engine)
                 }
             }
-            if settings.askEngine == .chatGPT {
+            switch settings.askEngine {
+            case .local:
+                TextField("Ask model:", text: $settings.askModel, prompt: Text(Settings.defaultAskModel))
+            case .chatGPT:
                 TextField("ChatGPT model:", text: $settings.askCloudModel, prompt: Text(AskEngine.chatGPT.defaultModel))
                 Text("Sends the screenshot and your question to OpenAI on your ChatGPT plan, through the Codex tool in the ChatGPT app (signed in with your ChatGPT account). Dictation still stays on this Mac.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            } else {
-                TextField("Ask model:", text: $settings.askModel, prompt: Text(Settings.defaultAskModel))
+            case .claude:
+                TextField("Claude model:", text: $settings.askClaudeModel, prompt: Text(AskEngine.claude.defaultModel))
+                ClaudeAccountRow()
+                Text("Sends the screenshot and your question to Anthropic on your Claude plan, through Claude Code with a sign-in that's only for LocalFlow, so it can be a different account from your own Claude Code. Dictation still stays on this Mac.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Stepper(value: $settings.askMemoryTurns, in: 0...20) {
                 Text(settings.askMemoryTurns == 0

@@ -35,6 +35,8 @@ enum AskEngine: String, CaseIterable, Identifiable {
     case local
     /// ChatGPT on the user's own plan, through the Codex tool in the ChatGPT app.
     case chatGPT
+    /// Claude on the user's own plan, through Claude Code signed in just for LocalFlow.
+    case claude
 
     var id: String { rawValue }
 
@@ -42,6 +44,7 @@ enum AskEngine: String, CaseIterable, Identifiable {
         switch self {
         case .local: return "Local model (Ollama)"
         case .chatGPT: return "ChatGPT (your subscription)"
+        case .claude: return "Claude (your Claude plan)"
         }
     }
 
@@ -49,6 +52,7 @@ enum AskEngine: String, CaseIterable, Identifiable {
         switch self {
         case .local: return "qwen3.5:9b"
         case .chatGPT: return "gpt-6-sol"
+        case .claude: return "claude-sonnet-5-5"
         }
     }
 }
@@ -180,12 +184,22 @@ final class Settings: ObservableObject {
         didSet { defaults.set(askCloudModel, forKey: "askCloudModel") }
     }
 
+    /// Claude model Ask uses when it answers through Claude.
+    @Published var askClaudeModel: String {
+        didSet { defaults.set(askClaudeModel, forKey: "askClaudeModel") }
+    }
+
     static let defaultAskModel = AskEngine.local.defaultModel
 
     /// The model to send for the chosen engine, falling back to its default if the field
     /// was cleared.
     var effectiveAskModel: String {
-        let typed = askEngine == .chatGPT ? askCloudModel : askModel
+        let typed: String
+        switch askEngine {
+        case .local: typed = askModel
+        case .chatGPT: typed = askCloudModel
+        case .claude: typed = askClaudeModel
+        }
         let trimmed = typed.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? askEngine.defaultModel : trimmed
     }
@@ -207,6 +221,7 @@ final class Settings: ObservableObject {
         askEngine = AskEngine(rawValue: defaults.string(forKey: "askEngine") ?? "") ?? .local
         askModel = defaults.string(forKey: "askModel") ?? Self.defaultAskModel
         askCloudModel = defaults.string(forKey: "askCloudModel") ?? AskEngine.chatGPT.defaultModel
+        askClaudeModel = defaults.string(forKey: "askClaudeModel") ?? AskEngine.claude.defaultModel
         askMemoryTurns = defaults.object(forKey: "askMemoryTurns") as? Int ?? 5
     }
 }

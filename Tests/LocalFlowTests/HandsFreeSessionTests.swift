@@ -101,19 +101,19 @@ struct HandsFreeSessionTests {
         session.keyDown()
         await until { composer.model.mode == .typing }
 
-        composer.model.text = "Hello there, Sam."
+        composer.model.text = "Hello there, friend."
         tap(session)
         #expect(mic.isOn)
         #expect(mic.starts == 1)
         #expect(composer.model.mode == .voice)
-        #expect(composer.model.text == "Hello there, Sam.")
+        #expect(composer.model.text == "Hello there, friend.")
 
         session.keyDown()
         await until { composer.model.mode == .typing }
-        #expect(composer.model.text == "Hello there, Sam. And more.")
+        #expect(composer.model.text == "Hello there, friend. And more.")
 
         session.paste()
-        #expect(script.pasted == ["Hello there, Sam. And more."])
+        #expect(script.pasted == ["Hello there, friend. And more."])
         #expect(!composer.isVisible)
         #expect(session.phase == .closed)
     }

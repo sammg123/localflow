@@ -373,6 +373,39 @@ struct AskOnScreenTests {
         #expect(composer.frame.minY == screen.visibleFrame.minY + 28)
     }
 
+    @Test("the hands-free window, paused, takes typing; Return pastes and Esc cancels")
+    func dictationWindowTakesTyping() async throws {
+        _ = NSApplication.shared
+        NSApp.setActivationPolicy(.accessory)
+        NSApp.mainMenu = MainMenu.make()
+        let screen = try #require(NSScreen.main)
+        let window = DictationComposerPanel()
+        var pasted: String?
+        var cancelled = false
+        window.onSend = { pasted = window.model.text }
+        window.onCancel = { cancelled = true }
+
+        window.model.reset(mode: .voice)
+        window.model.text = "Hello there."
+        window.show(on: screen)
+        pump(0.3)
+        window.model.mode = .typing // paused
+        pump(0.3)
+        pressKeyInSelf(UInt16(kVK_ANSI_A), flags: .maskCommand)
+        typeIntoSelf("Hello there, edited by hand.")
+        pump(0.3)
+        Self.snapshot(window.frame, name: "dictation-paused")
+        pressKeyInSelf(UInt16(kVK_Return))
+        pump(0.2)
+        pressKeyInSelf(UInt16(kVK_Escape))
+        pump(0.2)
+        window.hide()
+
+        #expect(pasted == "Hello there, edited by hand.")
+        #expect(cancelled)
+        #expect(window.frame.size == DictationComposerView.size)
+    }
+
     /// Key events go to this test process only, never to whatever app is in front.
     private func typeIntoSelf(_ text: String) {
         for character in text {

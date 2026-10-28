@@ -35,34 +35,34 @@ final class AppController {
         case processing
     }
 
-    private(set) var state: FlowState = .idle
+    // Internal (not private) where AppController+Sessions.swift needs it.
+    var state: FlowState = .idle
 
-    private let settings = Settings.shared
-    private let recorder = AudioRecorder()
-    private let rules = RulesPolisher()
+    let settings = Settings.shared
+    let recorder = AudioRecorder()
+    let rules = RulesPolisher()
     let inserter = TextInserter()
     let history = HistoryStore()
 
-    private var hotkeyMonitor: HotkeyMonitor!
+    var hotkeyMonitor: HotkeyMonitor!
     /// Nil when Ask is off or its key collides with the dictation key.
     private var askHotkeyMonitor: HotkeyMonitor?
     private var ask: AskController!
     private var askSession: AskSession!
     private var askChats: AskHistoryWindowController!
-    private var menuBar: MenuBarController!
-    private var hud: HUDPanel!
-    private var livePanel: LivePanel!
-    /// Runs only while the hands-free live window is up.
-    private var liveTranscriber: LiveTranscriber?
-    private var settingsWindow: SettingsWindowController!
-    private var llmPolisher: LLMPolisher!
+    var menuBar: MenuBarController!
+    var hud: HUDPanel!
+    /// The double-tap window: talk, pause to edit, Return to paste.
+    var handsFree: HandsFreeSession!
+    var settingsWindow: SettingsWindowController!
+    var llmPolisher: LLMPolisher!
     private var recorderPrepared = false
     /// Distinguishes overlapping process() tasks (utterance 2 can start recording,
     /// even processing, while utterance 1 is still being polished).
     private var processingGeneration = 0
     /// Serializes whole pipelines IN GENERATION ORDER (the slot is claimed synchronously
     /// in finishRecording), so back-to-back utterances always paste in spoken order.
-    private var processChain: Task<Void, Never> = Task {}
+    var processChain: Task<Void, Never> = Task {}
     /// Set by the 5-minute recording limit; consumed by the next finishRecording.
     private var pendingLimitNotice = false
     /// A Control + hotkey press that started no recording (command mode unavailable).
@@ -75,11 +75,14 @@ final class AppController {
     /// Always derived from settings — an engine switch can never desync this.
     /// (The factory caches instances, so this is cheap; in-flight dictations
     /// capture their own reference and are unaffected by switches.)
-    private var transcriber: Transcriber {
+    var transcriber: Transcriber {
         TranscriberFactory.make(settings.engine)
     }
 
+    var isHandsFreeWindowOpen: Bool { handsFree?.isOpen == true }
+
     var isHandsFree: Bool {
+        if handsFree?.isOpen == true { return true }
         if case .recording(.dictation(handsFree: true)) = state { return true }
         return false
     }
@@ -99,7 +102,6 @@ final class AppController {
 
     func start() {
         hud = HUDPanel()
-        livePanel = LivePanel()
         menuBar = MenuBarController(controller: self)
         settingsWindow = SettingsWindowController(controller: self)
         llmPolisher = TranscriberFactory.makeLLMPolisher()
@@ -110,10 +112,7 @@ final class AppController {
             mic: self,
             composer: composer,
             answers: ask,
-            transcribe: { [weak self] samples in
-                guard let engine = self?.transcriber else { throw CancellationError() }
-                return try await engine.transcribe(samples: samples)
-            },
+            transcribe: rawTranscribe,
             canOpen: { [weak self] in self?.askCanOpen() ?? false },
             swallowPress: { [weak self] in self?.askHotkeyMonitor?.swallowCurrentPress() }
         )
@@ -126,10 +125,12 @@ final class AppController {
             self?.showAskChats()
         }
 
+        handsFree = makeHandsFreeSession()
+
         recorder.levelHandler = { [weak self] level in
             DispatchQueue.main.async {
                 self?.hud.updateLevel(level)
-                self?.livePanel.updateLevel(level)
+                self?.handsFree.updateLevel(level)
                 self?.askSession.updateLevel(level)
             }
         }
@@ -137,6 +138,10 @@ final class AppController {
             guard let self, case .recording(let mode) = self.state else { return }
             if mode == .ask {
                 self.askSession.micStopped()
+                return
+            }
+            if self.handsFree.isOpen {
+                self.handsFree.micStopped()
                 return
             }
             // The notice itself is shown by process() at the end — flashing here would be
@@ -150,6 +155,9 @@ final class AppController {
             SoundPlayer.playError()
             if case .recording(.ask) = self.state {
                 self.askSession.micLost()
+            } else if self.handsFree.isOpen {
+                self.handsFree.micLost() // says so in its own window, where the pill would be
+                return
             } else {
                 self.abortRecording(silent: false)
             }
@@ -161,6 +169,8 @@ final class AppController {
         hotkeyMonitor.onPressEnded = { [weak self] held in self?.hotkeyReleased(held: held) }
         hotkeyMonitor.onDoubleTap = { [weak self] in self?.hotkeyDoubleTapped() }
         hotkeyMonitor.onEscape = { [weak self] in self?.cancelDictation() }
+        // Fn + Delete or Fn + arrow while editing in the hands-free window.
+        hotkeyMonitor.onKeyDownWhileHeld = { [weak self] in self?.handsFree.otherKey() }
         hotkeyMonitor.startMonitoring()
         configureAskHotkey()
 
@@ -190,7 +200,7 @@ final class AppController {
     }
 
     func shutdown() {
-        stopLiveWindow()
+        handsFree?.cancel()
         askSession?.cancel()
         ask?.dismiss()
         ask?.chats.flush()
@@ -210,9 +220,11 @@ final class AppController {
         case .recording(.dictation(handsFree: false)), .recording(.command):
             finishRecording()
         default:
-            break
+            // A press held in the hands-free window counts as let go.
+            if handsFree.isOpen { handsFree.keyUp(held: HotkeyMonitor.tapThreshold) }
         }
         hotkeyMonitor.updateHotkey(choice)
+        handsFree.keyName = dictationKeyName
         // The ask key turns off if it now matches the dictation key (and back on).
         configureAskHotkey()
     }
@@ -274,6 +286,10 @@ final class AppController {
         // The voice key also closes an open answer (and cancels one on its way). A
         // minimized one is being kept on purpose.
         if ask.isExpanded { ask.dismiss() }
+        if handsFree.isOpen {
+            handsFree.keyDown()
+            return
+        }
         switch state {
         case .idle, .processing:
             if command, !llmPolisher.isAvailable {
@@ -295,6 +311,10 @@ final class AppController {
     }
 
     private func hotkeyReleased(held: TimeInterval) {
+        if handsFree.isOpen {
+            handsFree.keyUp(held: held)
+            return
+        }
         switch state {
         case .recording(.dictation(handsFree: false)):
             if held >= HotkeyMonitor.tapThreshold {
@@ -335,6 +355,7 @@ final class AppController {
             // Control is usually still held when the hotkey comes up; a Cmd+V posted
             // under it reaches the app as Control-Cmd-V.
             await waitForModifiersReleased()
+            await waitForHandsFreeWindow()
             let result: InsertionResult?
             if let fallback {
                 result = await inserter.insert(fallback)
@@ -367,6 +388,11 @@ final class AppController {
             pasteLastTranscript()
             return
         }
+        if handsFree.isOpen {
+            // The monitor reports a second quick tap as a double-tap; the window times its own.
+            handsFree.keyUp(held: 0)
+            return
+        }
         switch state {
         case .recording(.dictation(handsFree: false)):
             // Second tap-down already restarted recording; just flip it to hands-free.
@@ -384,6 +410,10 @@ final class AppController {
     }
 
     func toggleHandsFree() {
+        if handsFree.isOpen {
+            handsFree.paste()
+            return
+        }
         switch state {
         case .idle:
             beginRecording(mode: .dictation(handsFree: true))
@@ -444,6 +474,11 @@ final class AppController {
 
     /// Checked before the Ask window first appears: it can't see the screen without this.
     private func askCanOpen() -> Bool {
+        // Both windows sit where the pill does; the dictation one is in use.
+        guard !handsFree.isOpen else {
+            NSSound.beep()
+            return false
+        }
         guard Permissions.screenRecordingGranted else {
             Permissions.requestScreenRecording()
             SoundPlayer.playError()
@@ -454,6 +489,10 @@ final class AppController {
     }
 
     private func cancelDictation() {
+        if handsFree.isOpen {
+            handsFree.cancel()
+            return
+        }
         guard case .recording = state else { return }
         abortRecording(silent: false)
     }
@@ -526,28 +565,13 @@ final class AppController {
             return
         }
         hud.hide()
-        livePanel.show()
-        let engine = transcriber
-        let live = LiveTranscriber(
-            sampleCount: { [recorder] in recorder.capturedSampleCount },
-            samples: { [recorder] range in recorder.samples(in: range) },
-            transcribe: { samples in try await engine.transcribe(samples: samples) },
-            onText: { [weak self] text in self?.livePanel.update(text: text) }
-        )
-        liveTranscriber = live
-        live.start()
-    }
-
-    private func stopLiveWindow() {
-        liveTranscriber?.stop()
-        liveTranscriber = nil
-        livePanel?.hide()
+        handsFree.open()
     }
 
     /// Awaits an abandonable task with a hard deadline. On timeout the task keeps
     /// running in the background (FoundationModels ignores cancellation) but its
     /// result is discarded — the caller moves on with nil.
-    private func awaitWithDeadline<T: Sendable>(_ task: Task<T?, Never>, seconds: Double) async -> T? {
+    func awaitWithDeadline<T: Sendable>(_ task: Task<T?, Never>, seconds: Double) async -> T? {
         await withCheckedContinuation { continuation in
             let once = Once()
             Task { @MainActor in
@@ -570,7 +594,6 @@ final class AppController {
             askSession.micLost()
             return
         }
-        stopLiveWindow()
         recorder.cancel()
         state = .idle
         hotkeyMonitor.escapeEnabled = false
@@ -588,7 +611,6 @@ final class AppController {
             askSession.micStopped() // finishes through stopAsk()
             return
         }
-        stopLiveWindow()
         let samples = recorder.stop()
         hotkeyMonitor.escapeEnabled = false
         menuBar.setIcon(recording: false)
@@ -650,6 +672,7 @@ final class AppController {
             if hudActive() { hud.flash(message, seconds: 3.5) }
         }
 
+        await waitForHandsFreeWindow()
         guard let selection = await inserter.captureSelection() else {
             fail("Command mode: select some text first")
             return
@@ -683,6 +706,7 @@ final class AppController {
             return
         }
 
+        await waitForHandsFreeWindow()
         let result = await inserter.insert(transformed)
         history.add(text: transformed, appName: appName)
         switch result {
@@ -722,13 +746,7 @@ final class AppController {
         }
         FlowLog.shared.write("transcribed \(raw.count) chars in \(started.duration(to: .now))")
 
-        let preCleaned = rules.apply(
-            raw,
-            category: category,
-            replacements: settings.replacements,
-            spokenCommands: settings.spokenCommands,
-            toneMatching: false
-        )
+        let preCleaned = preClean(raw, category: category)
         guard !preCleaned.isEmpty else {
             if AudioStats.isSilent(samples) {
                 let input = AudioRecorder.currentInputName
@@ -741,36 +759,11 @@ final class AppController {
             return
         }
 
-        var text = preCleaned
-        let wordCount = preCleaned.split { $0.isWhitespace }.count
-        // Short utterances normally skip the LLM (ASR is already punctuated), but a short
-        // one that still contains spelled-out numbers or punctuation-symbols ("room twenty
-        // four", "question mark") needs the context-aware pass to normalize it.
-        let needsNormalization = ITN.needsContextualNormalization(preCleaned)
-        if settings.polishMode == .appleIntelligence,
-           llmPolisher.isAvailable,
-           wordCount >= settings.polishMinWords || needsNormalization {
+        let text = await polish(preCleaned, category: category, appName: appName) {
             if hudActive() { hud.showProcessing("Polishing…") }
-            // Race the LLM against a real deadline. FoundationModels ignores task
-            // cancellation mid-generation (verified empirically), and a task group would
-            // await the losing child — so the polish runs as an ABANDONABLE unstructured
-            // task and the first finisher wins.
-            let polisher = llmPolisher!
-            let dictionary = settings.dictionaryWords
-            let polishTask = Task {
-                await polisher.polish(
-                    transcript: preCleaned,
-                    category: category,
-                    appName: appName,
-                    dictionary: dictionary
-                )
-            }
-            if let polished = await awaitWithDeadline(polishTask, seconds: 10) {
-                text = polished
-            }
         }
-        text = RulesPolisher.applyTone(to: text, category: category, enabled: settings.toneMatching)
 
+        await waitForHandsFreeWindow()
         let result = await inserter.insert(text)
         history.add(text: text, appName: appName)
         FlowLog.shared.write("insert into \(appName): \(result)")
@@ -790,60 +783,4 @@ final class AppController {
             if hudActive() { hud.flash("Copied to clipboard — \(reason)", seconds: 3.5) }
         }
     }
-}
-
-// MARK: - The microphone, lent to Ask
-
-extension AppController: AskMicrophone {
-    func startAsk() -> Bool {
-        switch state {
-        case .idle, .processing: break
-        case .recording: return false // a dictation has the mic
-        }
-        guard Permissions.allGranted else {
-            settingsWindow.show(tab: .setup)
-            return false
-        }
-        let engine = transcriber
-        guard engine.state == .ready else {
-            hud.flash(engine.state == .downloadingModel ? "Still downloading the speech model…" : "Speech model not ready yet")
-            return false
-        }
-        do {
-            try recorder.start()
-        } catch {
-            FlowLog.shared.write("mic start failed: \(error.localizedDescription), input: \(AudioRecorder.currentInputName)")
-            SoundPlayer.playError()
-            hud.flash("Couldn't start the microphone: \(error.localizedDescription)")
-            return false
-        }
-        // Ask runs outside processChain: a slow answer never holds up a dictation's paste.
-        state = .recording(.ask)
-        menuBar.setIcon(recording: true)
-        return true
-    }
-
-    func stopAsk() -> [Float] {
-        guard case .recording(.ask) = state else { return [] }
-        let samples = recorder.stop()
-        state = .idle
-        menuBar.setIcon(recording: false)
-        let duration = Double(samples.count) / AudioRecorder.targetSampleRate
-        FlowLog.shared.write(String(format: "ask recording stopped: %.1fs, peak %.4f", duration, AudioStats.peak(samples)))
-        if recorder.lastStopWasStalled {
-            recorder.rebuild(reason: "ask recording came back empty")
-        }
-        return samples
-    }
-
-    func discardAsk() {
-        guard case .recording(.ask) = state else { return }
-        recorder.cancel()
-        state = .idle
-        menuBar.setIcon(recording: false)
-    }
-
-    var capturedSampleCount: Int { recorder.capturedSampleCount }
-
-    func samples(in range: Range<Int>) -> [Float] { recorder.samples(in: range) }
 }

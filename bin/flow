@@ -22,7 +22,7 @@ start() {
   # The launch agent can sit loaded without starting; opening the app is the fallback.
   running || open "$APP"
   for _ in 1 2 3 4 5 6 7 8 9 10; do running && break; sleep 0.5; done
-  if running; then echo "LocalFlow is running. Hold Fn to talk, double-tap Fn for the live window."
+  if running; then echo "LocalFlow is running. Hold Fn to talk, double-tap Fn for hands-free (tap to pause and edit, Return pastes)."
   else echo "LocalFlow did not start. Try: open \"$APP\""; return 1; fi
 }
 

@@ -40,7 +40,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
 
         let handsFree = NSMenuItem(
-            title: controller.isHandsFree ? "Stop Hands-Free Dictation" : "Start Hands-Free Dictation",
+            title: controller.isHandsFreeWindowOpen ? "Paste Hands-Free Dictation"
+                : controller.isHandsFree ? "Stop Hands-Free Dictation" : "Start Hands-Free Dictation",
             action: #selector(toggleHandsFree), keyEquivalent: ""
         )
         handsFree.target = self

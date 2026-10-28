@@ -24,7 +24,10 @@ release ──► rule cleanup (fillers, replacements, spoken commands)
 | Gesture | Action |
 |---|---|
 | Hold hotkey (default: **Fn/🌐**) | Push-to-talk; release to transcribe |
-| Double-tap hotkey | Hands-free with the live window (words appear as you talk); tap again to paste |
+| Double-tap hotkey | Hands-free window: words appear as you talk |
+| Tap hotkey (hands-free) | Pause: the words are written down in the window, editable with the keyboard. Tap again to keep talking (new words go after your edits); hold to talk while held |
+| Return or the ⏎ button (hands-free) | Paste the window's text into the app you were in. Shift+Return = new line |
+| Esc (hands-free) | Throw it away |
 | **Ctrl + hotkey** (tap) | Paste the last transcript again (your clipboard is untouched) |
 | **Ctrl + hotkey** (hold) | Command mode: select text first, then speak an edit ("make this shorter", "turn into bullets") — the selection is replaced |
 | Esc while recording | Cancel |
@@ -43,7 +46,7 @@ Hotkey options: Right ⌥ (default), Fn/🌐, Right ⌘, ⌃⌥. If you pick Fn,
 Notes:
 - Esc cancels the dictation but the keystroke also reaches the frontmost app (the hotkey listener is observe-only by design — it needs no Input Monitoring permission). Avoid Esc if the target app treats it destructively; a quick tap of the hotkey also cancels.
 - Spoken "new line" / "new paragraph" commands are off by default (Settings → General) because they can misfire on dictation that legitimately contains those phrases. When on, they only trigger as standalone clauses.
-- Hands-free recordings auto-stop at 5 minutes.
+- Hands-free recordings pause at 5 minutes (tap the key to keep talking). The window takes the keyboard while open, without switching apps, so typing and Return land in it; Fn + Delete and Fn + arrows edit in the box rather than starting the mic.
 
 ## Ask (screen questions)
 

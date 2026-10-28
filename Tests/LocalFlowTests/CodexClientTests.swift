@@ -75,6 +75,10 @@ struct CodexClientTests {
         #expect(args.adjacentPair("--image", "/t/screen.png"))
         #expect(args.adjacentPair("--output-last-message", "/t/answer.txt"))
         #expect(args.adjacentPair("--cd", "/t"))
+        #expect(args.adjacentPair("--config", "history.persistence=\"none\""))
+        for tool in ["shell_tool", "unified_exec", "view_image", "computer_use", "browser_use"] {
+            #expect(args.adjacentPair("--disable", tool))
+        }
         // The prompt comes on stdin, and never right after --image (which takes a list).
         #expect(args.last == "-")
         #expect(args[args.count - 2] != "/t/screen.png")
@@ -135,6 +139,69 @@ struct CodexClientTests {
         #expect(started.duration(to: .now) < .seconds(3))
     }
 
+    @Test("the tool gets only what it needs from the environment")
+    func environment() {
+        let env = CodexInvocation.environment(home: "/Users/me", tmp: "/tmp/x")
+        #expect(env["CODEX_HOME"] == "/Users/me/.codex")
+        #expect(env["HOME"] == "/Users/me")
+        #expect(env["OPENAI_API_KEY"] == nil)
+        #expect(Set(env.keys) == ["HOME", "CODEX_HOME", "PATH", "TMPDIR", "LANG"])
+    }
+
+    @Test("only signed app bundles are trusted to hold the tool")
+    func candidates() {
+        #expect(CodexInvocation.candidates.allSatisfy { $0.hasPrefix("/Applications/") })
+    }
+
+    @Test("a model name that could read as a flag is refused before anything runs")
+    func modelName() async throws {
+        #expect(CodexInvocation.isValidModel("gpt-6-sol"))
+        #expect(CodexInvocation.isValidModel("gpt-5.5:latest"))
+        #expect(!CodexInvocation.isValidModel("--dangerously-bypass-approvals-and-sandbox"))
+        #expect(!CodexInvocation.isValidModel("gpt 6"))
+        #expect(!CodexInvocation.isValidModel(""))
+        let fake = try fakeCodex()
+        await #expect(throws: AskError.chatGPT("the model name in Settings (-x) isn't valid")) {
+            try await collect(CodexClient(executable: fake.path, model: "-x"))
+        }
+        #expect(!FileManager.default.fileExists(atPath: fake.dir.appendingPathComponent("args").path))
+    }
+
+    @Test("a run that ends without an answer says so instead of an empty bubble")
+    func emptyAnswer() async throws {
+        let fake = try fakeCodex(answer: "")
+        await #expect(throws: AskError.chatGPT("no answer came back")) {
+            try await collect(CodexClient(executable: fake.path, model: "gpt-6-sol"))
+        }
+    }
+
+    @Test("folders left by a crash are cleared, fresh ones are left alone")
+    func leftovers() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("leftovers-\(UUID().uuidString)")
+        let old = folder.appendingPathComponent("localflow-ask-old")
+        let fresh = folder.appendingPathComponent("localflow-ask-fresh")
+        let other = folder.appendingPathComponent("someone-else")
+        for dir in [old, fresh, other] {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -3_600)], ofItemAtPath: old.path)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -3_600)], ofItemAtPath: other.path)
+
+        CodexClient.removeLeftovers(in: folder)
+
+        #expect(!FileManager.default.fileExists(atPath: old.path))
+        #expect(FileManager.default.fileExists(atPath: fresh.path))
+        #expect(FileManager.default.fileExists(atPath: other.path))
+    }
+
+    @Test("links in answers are plain words, never clickable")
+    @MainActor
+    func linksArePlain() {
+        let shown = AnswerView.inlineMarkdown("See [the docs](https://evil.example/?d=secret) and **this**.")
+        #expect(shown.runs.allSatisfy { $0.link == nil })
+        #expect(String(shown.characters) == "See the docs and this.")
+    }
+
     @Test("the engine setting picks the client and the model name")
     @MainActor
     func engineChoice() {
@@ -144,8 +211,8 @@ struct CodexClientTests {
 }
 
 private extension Array where Element == String {
+    /// `flag` appears somewhere immediately followed by `value`.
     func adjacentPair(_ flag: String, _ value: String) -> Bool {
-        guard let i = firstIndex(of: flag), i + 1 < count else { return false }
-        return self[i + 1] == value
+        zip(self, dropFirst()).contains { $0 == flag && $1 == value }
     }
 }

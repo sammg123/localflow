@@ -210,8 +210,13 @@ struct AnswerView: View {
     }
 
     /// **bold**, *italic* and `code` from the model; anything else shows as typed.
+    /// Links show as plain words: text on the screen can steer a model into writing a
+    /// link whose address carries data away, so nothing in an answer is clickable.
     static func inlineMarkdown(_ text: String) -> AttributedString {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+        var attributed = (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+        let linked = attributed.runs.filter { $0.link != nil }.map(\.range)
+        for range in linked { attributed[range].link = nil }
+        return attributed
     }
 }

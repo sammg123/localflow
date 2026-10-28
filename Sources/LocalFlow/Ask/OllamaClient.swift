@@ -129,6 +129,9 @@ enum AskError: Error, Equatable {
     case claudeMissing
     /// LocalFlow's own Claude sign-in isn't signed in.
     case claudeSignedOut
+    /// The Claude plan's usage limit is hit; `detail` is Claude Code's own words when
+    /// there's no reset time to show.
+    case claudeOutOfUsage(resetsAt: Date?, detail: String?)
     case claude(String)
 
     /// The kind of failure, for the log. Never the text inside it, which can echo what
@@ -146,6 +149,7 @@ enum AskError: Error, Equatable {
         case .chatGPT: return "chatGPT"
         case .claudeMissing: return "claudeMissing"
         case .claudeSignedOut: return "claudeSignedOut"
+        case .claudeOutOfUsage: return "claudeOutOfUsage"
         case .claude: return "claude"
         }
     }
@@ -178,6 +182,11 @@ enum AskError: Error, Equatable {
                 + "Install Claude Code, or switch Ask to the local model in Settings."
         case .claudeSignedOut:
             return "Ask isn't signed in to Claude yet. Open LocalFlow Settings, click Sign in to Claude, then ask again."
+        case .claudeOutOfUsage(let resetsAt, let detail):
+            let when = resetsAt.map { " It resets \(AskError.resetPhrase(for: $0))." }
+                ?? detail.map { " Claude says: \($0.hasSuffix(".") ? String($0.dropLast()) : $0)." } ?? ""
+            return "You're out of Claude usage on the account Ask is signed in to." + when
+                + " Ask again after it resets, or switch Ask to the local model in Settings."
         case .claude(let detail):
             return "Claude failed: \(detail)"
         }

@@ -31,7 +31,7 @@ struct ClaudeClientTests {
     /// A stand-in `claude` that answers without any network: it records its arguments,
     /// stdin and sign-in folder, then prints `lines`.
     private func fakeClaude(lines: [String], exitCode: Int = 0, stderr: String = "",
-                            sleep: Int = 0) throws -> (path: String, dir: URL) {
+                            sleep: Int = 0, sleepAfter: Int = 0) throws -> (path: String, dir: URL) {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("fake-claude-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let script = """
@@ -44,6 +44,7 @@ struct ClaudeClientTests {
         cat <<'LINES'
         \(lines.joined(separator: "\n"))
         LINES
+        sleep \(sleepAfter)
         exit \(exitCode)
         """
         let path = dir.appendingPathComponent("claude").path
@@ -92,8 +93,10 @@ struct ClaudeClientTests {
         #expect(env["HOME"] == "/Users/me")
         #expect(env["ANTHROPIC_API_KEY"] == nil)
         #expect(env["ANTHROPIC_AUTH_TOKEN"] == nil)
-        #expect(Set(env.keys) == ["HOME", "CLAUDE_CONFIG_DIR", "PATH", "TMPDIR", "LANG",
+        #expect(Set(env.keys) == ["HOME", "USER", "CLAUDE_CONFIG_DIR", "PATH", "TMPDIR", "LANG",
                                   "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"])
+        // Claude Code finds its saved sign-in by the Mac username; without it, it reads as signed out.
+        #expect(env["USER"] == NSUserName())
         #expect(env["PATH"] == "/usr/bin:/bin:/usr/sbin:/sbin")
         let npm = ClaudeInvocation.environment(home: "/Users/me", tmp: "/tmp/x", configDirectory: config,
                                                toolFolder: ClaudeInvocation.folder(of: "/opt/homebrew/bin/claude"))
@@ -112,7 +115,7 @@ struct ClaudeClientTests {
         let chunks = try await collect(client(fake.path))
 
         #expect(chunks == ["Done."])
-        #expect(started.duration(to: .now) < .seconds(5))
+        #expect(started.duration(to: .now) < .seconds(10)) // not the helper's 30
     }
 
     @Test("the question goes in as one message: the screenshot, then the chat so far and the question")
@@ -174,10 +177,93 @@ struct ClaudeClientTests {
         await #expect(throws: AskError.claudeSignedOut) { try await collect(client(fake.path)) }
     }
 
-    @Test("a usage limit or other failure passes on what the tool said, without its timestamp")
+    @Test("any other failure passes on what the tool said, without a trailing timestamp")
     func otherFailure() async throws {
-        let fake = try fakeClaude(lines: [result(error: "Claude AI usage limit reached|1700000000")], exitCode: 1)
-        await #expect(throws: AskError.claude("Claude AI usage limit reached")) { try await collect(client(fake.path)) }
+        let fake = try fakeClaude(lines: [result(error: "API Error: 529 Overloaded|1700000000")], exitCode: 1)
+        await #expect(throws: AskError.claude("API Error: 529 Overloaded")) { try await collect(client(fake.path)) }
+    }
+
+    // MARK: Out of usage
+
+    private func rateLimit(status: String, resetsAt: Int = 1_793_229_600, overage: Bool = false) -> String {
+        let event: [String: Any] = ["type": "rate_limit_event", "rate_limit_info": [
+            "status": status, "resetsAt": resetsAt, "rateLimitType": "five_hour", "isUsingOverage": overage,
+        ]]
+        return String(decoding: try! JSONSerialization.data(withJSONObject: event), as: UTF8.self)
+    }
+
+    @Test("reads a usage limit that's been hit, and ignores one that still allows the ask")
+    func parseUsageLimit() {
+        #expect(ClaudeStreamEvent.parse(line: rateLimit(status: "rejected"))
+            == .usageLimit(resetsAt: Date(timeIntervalSince1970: 1_793_229_600)))
+        #expect(ClaudeStreamEvent.parse(line: rateLimit(status: "allowed")) == nil)
+        #expect(ClaudeStreamEvent.parse(line: rateLimit(status: "allowed_warning")) == nil)
+        #expect(ClaudeStreamEvent.parse(line: rateLimit(status: "rejected", overage: true)) == nil)
+        let overageAllowed = #"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1793229600,"isUsingOverage":false,"overageStatus":"allowed"}}"#
+        #expect(ClaudeStreamEvent.parse(line: overageAllowed) == nil)
+    }
+
+    @Test("a limit notice after the answer has started doesn't cut it off")
+    func limitAfterAnswering() async throws {
+        let fake = try fakeClaude(lines: [delta("The second bar is 17."), rateLimit(status: "rejected"), result()])
+        let chunks = try await collect(client(fake.path))
+        #expect(chunks == ["The second bar is 17."])
+    }
+
+    @Test("out of usage says so right away, with when it resets, instead of waiting")
+    func outOfUsage() async throws {
+        // The fake would sit there for 30 seconds after saying the limit is hit.
+        let fake = try fakeClaude(lines: [initLine, rateLimit(status: "rejected")], sleepAfter: 30)
+        let started = ContinuousClock.now
+        await #expect(throws: AskError.claudeOutOfUsage(resetsAt: Date(timeIntervalSince1970: 1_793_229_600), detail: nil)) {
+            try await collect(client(fake.path))
+        }
+        #expect(started.duration(to: .now) < .seconds(10)) // not the fake's 30
+    }
+
+    @Test("a usage-limit failure in the tool's words is out of usage too", arguments: [
+        ("Claude AI usage limit reached|1793229600", "rate_limit", Date(timeIntervalSince1970: 1_793_229_600)),
+        ("You've hit your limit · resets 3pm (America/Los_Angeles)", nil, nil),
+        ("Out of usage credits", "billing_error", nil),
+        ("You're out of extra usage · resets Nov 3", nil, nil),
+        ("Opus limit reached ∙ resets 9am", nil, nil),
+    ] as [(String, String?, Date?)])
+    func outOfUsageWords(text: String, code: String?, resetsAt: Date?) {
+        guard case .claudeOutOfUsage(let when, _) = AskError.fromClaude(code: code, text: text) else {
+            Issue.record("expected out of usage for \(text)")
+            return
+        }
+        #expect(when == resetsAt)
+    }
+
+    @Test("a context-length error or a brief throttle is not mistaken for running out of usage")
+    func notUsage() {
+        #expect(AskError.fromClaude(code: nil, text: "Context limit reached") == .claude("Context limit reached"))
+        #expect(AskError.fromClaude(code: "rate_limit", text: "Request rate limit exceeded, retry shortly")
+            == .claude("Request rate limit exceeded, retry shortly"))
+        #expect(AskError.fromClaude(code: nil, text: "Took 3 steps|42") == .claude("Took 3 steps|42"))
+    }
+
+    @Test("the out-of-usage message says when it resets and how to keep going")
+    func outOfUsageMessage() throws {
+        let calendar = Calendar.current
+        let now = try #require(calendar.date(bySettingHour: 12, minute: 0, second: 0, of: Date()))
+        let later = now.addingTimeInterval(3 * 3_600)
+        let tomorrow = now.addingTimeInterval(26 * 3_600)
+        let nextWeek = now.addingTimeInterval(4 * 86_400)
+        #expect(AskError.resetPhrase(for: later, now: now).hasPrefix("at "))
+        #expect(AskError.resetPhrase(for: tomorrow, now: now).hasPrefix("tomorrow at "))
+        #expect(AskError.resetPhrase(for: nextWeek, now: now).hasPrefix("on "))
+        #expect(AskError.resetPhrase(for: now.addingTimeInterval(-60), now: now) == "shortly")
+
+        let message = AskError.claudeOutOfUsage(resetsAt: later, detail: nil).message
+        #expect(message.contains("out of Claude usage"))
+        #expect(message.contains("resets"))
+        #expect(message.contains("local model"))
+        let worded = AskError.claudeOutOfUsage(resetsAt: nil, detail: "resets 3pm").message
+        #expect(worded.contains("resets 3pm"))
+        #expect(!AskError.claudeOutOfUsage(resetsAt: nil, detail: "Out of usage credits.").message.contains(".."))
+        #expect(AskError.claudeOutOfUsage(resetsAt: nil, detail: nil).logName == "claudeOutOfUsage")
     }
 
     @Test("a crash with no result passes on the tool's last error line")

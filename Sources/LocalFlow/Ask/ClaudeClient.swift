@@ -22,10 +22,11 @@ enum ClaudeInvocation {
     /// Just enough to run and find LocalFlow's sign-in; no API keys or proxies from the
     /// app's environment. Non-essential traffic (updates, telemetry) is off. The tool's
     /// own folder goes on PATH so an npm install finds the node beside it.
-    static func environment(home: String = NSHomeDirectory(), tmp: String, configDirectory: String,
-                            toolFolder: String? = nil) -> [String: String] {
+    /// USER is needed: Claude Code finds its saved sign-in in the keychain by it.
+    static func environment(home: String = NSHomeDirectory(), user: String = NSUserName(), tmp: String,
+                            configDirectory: String, toolFolder: String? = nil) -> [String: String] {
         let path = ([toolFolder].compactMap { $0 } + ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]).joined(separator: ":")
-        return ["HOME": home, "CLAUDE_CONFIG_DIR": configDirectory, "PATH": path,
+        return ["HOME": home, "USER": user, "CLAUDE_CONFIG_DIR": configDirectory, "PATH": path,
                 "TMPDIR": tmp, "LANG": "en_US.UTF-8", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"]
     }
 
@@ -71,6 +72,8 @@ enum ClaudeStreamEvent: Equatable {
     case apiError(String)
     /// The run ended; `failure` is what it said when it failed.
     case finished(failure: String?)
+    /// The plan's usage limit is hit and no extra usage is covering it.
+    case usageLimit(resetsAt: Date?)
 
     static func parse(line: String) -> ClaudeStreamEvent? {
         guard let data = line.data(using: .utf8),
@@ -83,6 +86,11 @@ enum ClaudeStreamEvent: Equatable {
             return .text(text)
         case "assistant":
             return (object["error"] as? String).map(ClaudeStreamEvent.apiError)
+        case "rate_limit_event":
+            // Extra usage (overage) can still pay for the answer, so that's not a stop.
+            guard let info = object["rate_limit_info"] as? [String: Any], info["status"] as? String == "rejected",
+                  info["isUsingOverage"] as? Bool != true, info["overageStatus"] as? String != "allowed" else { return nil }
+            return .usageLimit(resetsAt: (info["resetsAt"] as? Double).map(Date.init(timeIntervalSince1970:)))
         case "result":
             let failed = object["is_error"] as? Bool ?? false
             return .finished(failure: failed ? (object["result"] as? String ?? "it stopped without saying why") : nil)
@@ -166,6 +174,7 @@ struct ClaudeClient: AskModelClient {
         var wroteText = false
         var errorCode: String?
         var ending: ClaudeStreamEvent?
+        var outOfUsage: AskError?
         let status = try await AskTool.run(process, timeout: timeout,
                                            launchFailure: { .claude("couldn't start Claude Code: \($0)") },
                                            onExit: { reader.toolExited() }) {
@@ -178,12 +187,19 @@ struct ClaudeClient: AskModelClient {
                     errorCode = code
                 case .finished(let failure):
                     ending = .finished(failure: failure)
+                case .usageLimit(let resetsAt) where !wroteText:
+                    // Say so now rather than wait on a run that can't answer.
+                    outOfUsage = .claudeOutOfUsage(resetsAt: resetsAt, detail: nil)
+                    AskTool.stop(process)
+                case .usageLimit:
+                    continue // already answering
                 case nil:
                     continue
                 }
             }
         }
         try Task.checkCancellation()
+        if let outOfUsage { throw outOfUsage }
         if case .finished(let failure?) = ending {
             throw AskError.fromClaude(code: errorCode, text: failure)
         }
@@ -196,8 +212,13 @@ struct ClaudeClient: AskModelClient {
 }
 
 extension AskError {
-    /// From what Claude Code said when it failed: a sign-in problem, or its own words
-    /// (a usage limit says when it resets), minus the raw timestamp it sometimes appends.
+    /// Words Claude Code uses when the plan's usage is used up.
+    static let usageLimitWords = ["usage limit", "hit your limit", "out of usage", "out of extra usage",
+                                  "credit balance", "weekly limit", "session limit", "5-hour limit",
+                                  "opus limit", "sonnet limit"]
+
+    /// From what Claude Code said when it failed: a sign-in problem, the plan's usage
+    /// used up, or its own words, minus the raw timestamp it sometimes appends.
     static func fromClaude(code: String?, text: String) -> AskError {
         let lower = text.lowercased()
         let signedOut = ["not logged in", "/login", "invalid api key"]
@@ -205,8 +226,27 @@ extension AskError {
             return .claudeSignedOut
         }
         let firstLine = text.split(whereSeparator: \.isNewline).first.map(String.init) ?? text
-        let detail = firstLine.replacingOccurrences(of: #"\|\d+$"#, with: "", options: .regularExpression)
-            .trimmingCharacters(in: .whitespaces)
-        return .claude(String(detail.prefix(200)))
+        let stamp = firstLine.range(of: #"\|\d{9,11}$"#, options: .regularExpression) // a Unix time
+        let detail = String((stamp.map { String(firstLine[..<$0.lowerBound]) } ?? firstLine)
+            .trimmingCharacters(in: .whitespaces).prefix(200))
+        // A plain rate_limit is often a brief throttle that a retry fixes, so it only
+        // counts with the plan's own usage words; billing_error is credits used up.
+        if code == "billing_error" || usageLimitWords.contains(where: lower.contains) {
+            let resetsAt = stamp.flatMap { Double(firstLine[$0].dropFirst()) }.map(Date.init(timeIntervalSince1970:))
+            return .claudeOutOfUsage(resetsAt: resetsAt, detail: resetsAt == nil ? detail : nil)
+        }
+        return .claude(detail)
+    }
+
+    /// When a usage limit resets, said the way a person would: "at 3:00 PM",
+    /// "tomorrow at 9:00 AM", "on Monday, Nov 2 at 9:00 AM".
+    static func resetPhrase(for date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+        guard date > now else { return "shortly" }
+        let time = date.formatted(date: .omitted, time: .shortened)
+        if calendar.isDate(date, inSameDayAs: now) { return "at \(time)" }
+        if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now), calendar.isDate(date, inSameDayAs: tomorrow) {
+            return "tomorrow at \(time)"
+        }
+        return "on \(date.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())) at \(time)"
     }
 }

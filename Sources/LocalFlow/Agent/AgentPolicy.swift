@@ -15,8 +15,11 @@ enum AgentPolicy {
     /// The longest command or text an approval line shows.
     static let shownLimit = 120
 
-    private static let readOnly: Set<String> = ["Read", "Glob", "Grep", "WebFetch", "WebSearch", "TodoWrite"]
-    private static let fileWriters: Set<String> = ["Write", "Edit"]
+    /// Reading, and Claude Code's own helpers: finding a tool, a subagent (whose every
+    /// step comes here too), stopping one of its own background tasks.
+    private static let readOnly: Set<String> = ["Read", "Glob", "Grep", "WebFetch", "WebSearch", "TodoWrite",
+                                                "ToolSearch", "Task", "TaskStop"]
+    private static let fileWriters: Set<String> = ["Write", "Edit", "NotebookEdit"]
     private static let screenSafe: Set<String> = ["screenshot", "list_apps", "wait", "move", "scroll", "drag"]
     private static let screenChecked: Set<String> = ["click", "type", "key", "open_app"]
 
@@ -40,6 +43,7 @@ enum AgentPolicy {
                                 home: String) -> [Reason] {
         if readOnly.contains(toolName) { return [] }
         if toolName == "Bash" { return bash(input, home: home) }
+        if toolName == "Monitor" { return monitor(input, home: home) }
         if fileWriters.contains(toolName) { return file(input, home: home) }
         if toolName.hasPrefix(screenPrefix) {
             let action = String(toolName.dropFirst(screenPrefix.count))
@@ -48,6 +52,10 @@ enum AgentPolicy {
                 return [Reason(summary: reason.summary, grantKey: reason.grantKey)]
             }
             if screenChecked.contains(action) { return [] }
+        }
+        // A connector's tools: looking runs, anything else asks, one tool at a time.
+        if let tool = ConnectorTool(toolName: toolName) {
+            return tool.isReadLike ? [] : [Reason(summary: clip(tool.summary), grantKey: tool.grantKey)]
         }
         return [Reason(summary: "Use \(toolName)", grantKey: "tool:\(toolName)")]
     }
@@ -63,13 +71,24 @@ enum AgentPolicy {
         }
     }
 
+    /// A watch runs a command like Bash does; one on a live connection asks.
+    private static func monitor(_ input: AgentJSON, home: String) -> [Reason] {
+        if input["command"] == nil, let url = input["ws"]?["url"]?.string {
+            return [Reason(summary: "Watch a live connection to `\(clip(url))`", grantKey: "Monitor:ws")]
+        }
+        return bash(input, home: home)
+    }
+
     private static func file(_ input: AgentJSON, home: String) -> [Reason] {
-        guard let path = input["file_path"]?.string else {
+        guard let path = input["file_path"]?.string ?? input["notebook_path"]?.string else {
             return [Reason(summary: "Write a file", grantKey: "file:unknown")]
         }
         let workingDirectory = AgentInvocation.workingDirectory(home: home)
         guard AgentPaths.isProtected(path, home: home, workingDirectory: workingDirectory) else { return [] }
         let full = AgentPaths.absolute(path, home: home, workingDirectory: workingDirectory)
+        if full.lowercased() == AgentPaths.instructionsFile(home: home).lowercased() {
+            return [Reason(summary: "Change your standing instructions (localflow.md)", grantKey: "file:" + full)]
+        }
         return [Reason(summary: "Write `\(clip(full))`", grantKey: "file:" + full)]
     }
 

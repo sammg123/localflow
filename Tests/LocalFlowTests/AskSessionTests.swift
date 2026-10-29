@@ -39,10 +39,15 @@ final class FakeMic: AskMicrophone {
 final class FakeComposer: ComposerSurface {
     let model = ComposerModel()
     var onSend: (() -> Void)?
-    var onSendToAgent: (() -> Void)?
     var onCancel: (() -> Void)?
     private(set) var isVisible = false
     private(set) var shows = 0
+    private(set) var outcomes: [ComposerOutcome] = []
+
+    func finish(_ outcome: ComposerOutcome) {
+        outcomes.append(outcome)
+        isVisible = false
+    }
 
     func show(on screen: NSScreen?) {
         shows += 1
@@ -360,18 +365,20 @@ struct AskSessionTests {
         #expect(composer.isVisible)
     }
 
-    @Test("Do it hands the typed words to the agent, not to Ask, and closes the window")
-    func doItTyped() async {
+    @Test("Return in agent mode hands the typed words to the agent, not to Ask, and closes the window")
+    func agentModeSend() async {
         let (session, _) = makeSession()
         var tasks: [String] = []
-        session.onTask = { task, _ in tasks.append(task) }
+        session.onTask = { task, _, _ in tasks.append(task) }
         tap(session, at: 0)
         composer.model.text = "  rename the screenshots on my desktop  "
+        composer.model.toggleAgentMode()
 
-        composer.onSendToAgent?()
+        composer.onSend?()
 
         #expect(tasks == ["rename the screenshots on my desktop"])
         #expect(!composer.isVisible)
+        #expect(composer.outcomes == [.handedToAgent])
         #expect(session.phase == .closed)
         #expect(!surface.isVisible)
         #expect(!indicator.isShowing)
@@ -379,16 +386,17 @@ struct AskSessionTests {
         #expect(client.bodies.isEmpty)
     }
 
-    @Test("Do it while talking finishes the words first, then hands them to the agent")
-    func doItWhileTalking() async {
+    @Test("Return in agent mode while talking finishes the words first, then hands them to the agent")
+    func agentModeWhileTalking() async {
         let (session, _) = makeSession(saying: "clean up my downloads")
         var tasks: [String] = []
-        session.onTask = { task, _ in tasks.append(task) }
+        session.onTask = { task, _, _ in tasks.append(task) }
         tap(session, at: 0)
         tap(session, at: 1)
         #expect(mic.isOn)
+        composer.model.toggleAgentMode()
 
-        session.send(to: .agent)
+        session.send()
         await until { !tasks.isEmpty }
 
         #expect(tasks.count == 1)
@@ -397,35 +405,99 @@ struct AskSessionTests {
         #expect(client.bodies.isEmpty)
     }
 
-    @Test("Do it with an empty box hands nothing over and keeps the window open")
-    func doItEmpty() {
+    @Test("an empty box in agent mode hands nothing over and keeps the window open")
+    func agentModeEmpty() {
         let (session, _) = makeSession()
         var tasks: [String] = []
-        session.onTask = { task, _ in tasks.append(task) }
+        session.onTask = { task, _, _ in tasks.append(task) }
         tap(session, at: 0)
+        composer.model.toggleAgentMode()
 
-        session.send(to: .agent)
+        session.send()
 
         #expect(tasks.isEmpty)
         #expect(composer.isVisible)
         #expect(session.phase == .typing)
     }
 
-    @Test("after a Do it, the next Return asks a question again")
-    func doItDoesNotStick() async {
+    @Test("the window opens in Ask mode again after an agent send; Return asks")
+    func agentModeDoesNotStick() async {
         let (session, _) = makeSession()
         var tasks: [String] = []
-        session.onTask = { task, _ in tasks.append(task) }
+        session.onTask = { task, _, _ in tasks.append(task) }
         tap(session, at: 0)
+        composer.model.toggleAgentMode()
         composer.model.text = "open my calendar"
-        session.send(to: .agent)
+        session.send()
 
         tap(session, at: 10)
+        #expect(!composer.model.agentMode)
         composer.model.text = "what's on screen"
         session.send()
         await until { !client.bodies.isEmpty }
 
         #expect(tasks == ["open my calendar"])
         #expect(client.bodies.count == 1)
+        #expect(composer.outcomes == [.handedToAgent, .asked])
+    }
+
+    @Test("⌘ toggles back to Ask before sending: Return then asks")
+    func toggledBack() async {
+        let (session, _) = makeSession()
+        var tasks: [String] = []
+        session.onTask = { task, _, _ in tasks.append(task) }
+        tap(session, at: 0)
+        composer.model.toggleAgentMode()
+        composer.model.toggleAgentMode()
+        composer.model.text = "what's this chart"
+
+        session.send()
+        await until { !client.bodies.isEmpty }
+
+        #expect(tasks.isEmpty)
+        #expect(client.bodies.count == 1)
+    }
+
+    @Test("opened for the agent (⌘ on its window), the box starts in agent mode")
+    func openForAgent() {
+        let (session, _) = makeSession()
+
+        session.openForTyping(agentMode: true)
+
+        #expect(composer.isVisible)
+        #expect(composer.model.agentMode)
+        #expect(composer.model.mode == .typing)
+    }
+
+    @Test("Instant goes along with an agent send, and only in agent mode")
+    func instantRidesAlong() async {
+        let (session, _) = makeSession()
+        var sent: [(String, Bool)] = []
+        session.onTask = { task, _, instant in sent.append((task, instant)) }
+        tap(session, at: 0)
+        composer.model.toggleAgentMode()
+        #expect(composer.model.toggleInstant())
+        composer.model.text = "make the save button blue"
+        session.send()
+
+        tap(session, at: 10)
+        composer.model.text = "what's on screen"
+        session.send()
+        await until { !client.bodies.isEmpty }
+
+        #expect(sent.count == 1)
+        #expect(sent.first?.0 == "make the save button blue")
+        #expect(sent.first?.1 == true)
+        #expect(client.bodies.count == 1)
+    }
+
+    @Test("Esc closes the window as cancelled")
+    func cancelOutcome() {
+        let (session, _) = makeSession()
+        tap(session, at: 0)
+
+        session.cancel()
+
+        #expect(composer.outcomes == [.cancelled])
     }
 }

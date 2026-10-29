@@ -13,7 +13,8 @@ struct AgentInvocationTests {
     @Test("runs headless, asks LocalFlow for permission over stdio, and loads only LocalFlow's own settings")
     func arguments() {
         let args = AgentInvocation.arguments(model: "claude-sonnet-5-5", effort: "medium",
-                                             mcpConfigPath: "/tmp/x/mcp.json", home: home)
+                                             mcpConfigPath: "/tmp/x/mcp.json", promptPath: "/tmp/x/prompt.md",
+                                             home: home)
         #expect(args.first == "-p")
         #expect(args.pair("--input-format", "stream-json"))
         #expect(args.pair("--output-format", "stream-json"))
@@ -24,8 +25,11 @@ struct AgentInvocationTests {
         #expect(args.pair("--setting-sources", "user"))
         #expect(args.pair("--mcp-config", "/tmp/x/mcp.json"))
         #expect(args.pair("--add-dir", home))
-        #expect(args.pair("--append-system-prompt", AgentInvocation.instructions))
-        #expect(args.pair("--tools", "Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch,TodoWrite"))
+        // From a private file, so the instructions and memory aren't in the process's arguments.
+        #expect(args.pair("--append-system-prompt-file", "/tmp/x/prompt.md"))
+        #expect(!args.contains("--append-system-prompt"))
+        #expect(args.pair("--tools", "Bash,Read,Write,Edit,NotebookEdit,Glob,Grep,WebFetch,WebSearch,TodoWrite,"
+            + "Task,TaskStop,Monitor,ToolSearch"))
         for flag in ["--include-partial-messages", "--verbose", "--strict-mcp-config", "--no-session-persistence"] {
             #expect(args.contains(flag))
         }
@@ -34,11 +38,29 @@ struct AgentInvocationTests {
         #expect(!args.contains("bypassPermissions"))
     }
 
-    @Test("a different appended prompt replaces the default instructions")
+    @Test("the appended prompt is the instructions plus LocalFlow's memory, when there is some")
     func appendedPrompt() {
-        let args = AgentInvocation.arguments(model: "m", effort: "low", mcpConfigPath: "/x", home: home,
-                                             appendPrompt: "be brief")
-        #expect(args.pair("--append-system-prompt", "be brief"))
+        #expect(AgentInvocation.prompt(memory: "") == AgentInvocation.instructions)
+        let prompt = AgentInvocation.prompt(memory: "## LocalFlow memory\nNorthwind: ~/northwind")
+        #expect(prompt.hasPrefix(AgentInvocation.instructions))
+        #expect(prompt.hasSuffix("Northwind: ~/northwind"))
+    }
+
+    @Test("a run can name its own tools")
+    func ownTools() {
+        let args = AgentInvocation.arguments(model: "m", effort: "low", mcpConfigPath: "/x", promptPath: "/p",
+                                             home: home, tools: ["Read", "Edit"])
+        #expect(args.pair("--tools", "Read,Edit"))
+    }
+
+    @Test("Claude Code's like-for-like tools are there: subagents, background tasks, notebooks, tool search")
+    func claudeCodeTools() {
+        for tool in ["Task", "TaskStop", "Monitor", "NotebookEdit", "ToolSearch", "Bash", "WebFetch"] {
+            #expect(AgentInvocation.tools.contains(tool))
+        }
+        for interactive in ["AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "CronCreate", "Workflow"] {
+            #expect(!AgentInvocation.tools.contains(interactive))
+        }
     }
 
     @Test("the agent's shell gets a real PATH and the login shell, and still no keys from the app")
@@ -89,6 +111,29 @@ struct AgentInvocationTests {
         #expect(localflow["type"] as? String == "stdio")
         #expect(localflow["command"] as? String == "/Applications/LocalFlow.app/Contents/MacOS/LocalFlow")
         #expect(localflow["args"] as? [String] == ["--computer-mcp", "--display", "69733632"])
+    }
+
+    @Test("connected servers join the MCP config, and none can take the screen tools' name")
+    func connectedServers() throws {
+        let github: AgentJSON = ["type": "http", "url": "https://example.com/mcp/"]
+        let impostor: AgentJSON = ["type": "stdio", "command": "/tmp/evil"]
+        let data = AgentInvocation.mcpConfig(executable: "/LocalFlow", displayID: 1,
+                                             servers: ["github": github, "localflow": impostor])
+        let servers = try #require(json(data)["mcpServers"] as? [String: Any])
+        #expect(Set(servers.keys) == ["localflow", "github"])
+        let localflow = try #require(servers["localflow"] as? [String: Any])
+        #expect(localflow["command"] as? String == "/LocalFlow")
+        let connected = try #require(servers["github"] as? [String: Any])
+        #expect(connected["url"] as? String == "https://example.com/mcp/")
+    }
+
+    @Test("a run's options default to the agent's own: medium effort, its instructions, its tools, no servers")
+    func runOptions() {
+        let options = AgentRunOptions()
+        #expect(options.effort == AgentInvocation.defaultEffort)
+        #expect(options.appendPrompt == AgentInvocation.instructions)
+        #expect(options.tools == AgentInvocation.tools)
+        #expect(options.servers.isEmpty)
     }
 
     @Test("a user turn is one line: the screenshot if there is one, then the text")

@@ -212,9 +212,16 @@ struct AskRenderTests {
         #expect(model.title == "Listening")
         #expect(model.hint.contains("Right ⌥ to stop"))
         model.mode = .typing
+        #expect(model.title == "Ask about your screen")
         #expect(model.hint.contains("Right ⌥ to talk"))
-        #expect(model.hint.contains("Return to ask"))
-        #expect(model.hint.contains("⌘Return to do it"))
+        #expect(model.hint.contains("Return to send"))
+        #expect(model.hint.contains("⌘ for agent"))
+        #expect(!model.hint.contains("⌘Return"))
+        model.agentMode = true
+        #expect(model.title == "Tell the agent what to do")
+        #expect(model.hint.contains("Return to send"))
+        #expect(model.hint.contains("⌘ for Ask"))
+        #expect(model.hint.contains("⌘I"))
     }
 
     @Test("send is off only when there's nothing to send")

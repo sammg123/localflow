@@ -13,9 +13,17 @@ private final class ComposerWindow: NSPanel {
 @MainActor
 class ComposerPanel: ComposerSurface {
     let model = ComposerModel()
-    var onSend: (() -> Void)?
-    var onSendToAgent: (() -> Void)?
-    var onCancel: (() -> Void)?
+    var onSend: (() -> Void)? {
+        didSet { keys.onSend = onSend }
+    }
+    var onCancel: (() -> Void)? {
+        didSet { keys.onCancel = onCancel }
+    }
+    /// ⌘ switches Ask and agent mode and ⌘I Instant (the Ask window).
+    var takesModeKeys: Bool {
+        get { keys.takesModeKeys }
+        set { keys.takesModeKeys = newValue }
+    }
 
     /// How long after showing the window it's checked for having reached the screen.
     static let landingCheckDelay: Duration = .milliseconds(300)
@@ -23,7 +31,7 @@ class ComposerPanel: ComposerSurface {
     private var panel: ComposerWindow
     private let size: NSSize
     private let isOnScreen: @MainActor (NSWindow) -> Bool
-    private var keyMonitor: Any?
+    private lazy var keys = ComposerKeys(model: model) { [weak self] in self?.panel }
     /// Bumped per show and hide, so only the latest show's landing check runs.
     private var landingCheck = 0
 
@@ -80,7 +88,7 @@ class ComposerPanel: ComposerSurface {
         }
         panel.orderFrontRegardless()
         panel.makeKey()
-        installKeyMonitor()
+        keys.install()
         landingCheck += 1
         confirmLanded(isRetry: false)
     }
@@ -129,7 +137,7 @@ class ComposerPanel: ComposerSurface {
     }
 
     func hide() {
-        removeKeyMonitor()
+        keys.remove()
         landingCheck += 1
         guard panel.isVisible else { return }
         panel.orderOut(nil)
@@ -146,60 +154,5 @@ class ComposerPanel: ComposerSurface {
         panel.setFrame(NSRect(x: visible.midX - size.width / 2, y: visible.minY + 28,
                               width: size.width, height: size.height),
                        display: false)
-    }
-
-    /// Return sends (Cmd+Return to the agent, where there is one), Esc cancels, and the
-    /// edit shortcuts work. (LocalFlow has no Edit menu, which is what normally routes
-    /// Cmd+V and friends to a text field.)
-    private func installKeyMonitor() {
-        guard keyMonitor == nil else { return }
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            MainActor.assumeIsolated {
-                guard let self, event.window === self.panel else { return event }
-                return self.handleKey(event) ? nil : event
-            }
-        }
-    }
-
-    private func removeKeyMonitor() {
-        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
-        keyMonitor = nil
-    }
-
-    private func handleKey(_ event: NSEvent) -> Bool {
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        switch Int(event.keyCode) {
-        case kVK_Return, kVK_ANSI_KeypadEnter:
-            // Shift+Return is a new line; Return while an input method is composing
-            // (Japanese, Chinese) confirms the characters instead of sending.
-            let composing = (panel.firstResponder as? NSTextView)?.hasMarkedText() == true
-            guard !flags.contains(.shift), !composing else { return false }
-            if flags.contains(.command), let onSendToAgent {
-                onSendToAgent()
-            } else {
-                onSend?()
-            }
-            return true
-        case kVK_Escape:
-            onCancel?()
-            return true
-        default:
-            guard flags.contains(.command), let action = Self.editAction(for: event, shift: flags.contains(.shift)) else {
-                return false
-            }
-            // Straight to the text box's responder chain: the app is usually not active.
-            return panel.firstResponder?.tryToPerform(action, with: nil) ?? false
-        }
-    }
-
-    private static func editAction(for event: NSEvent, shift: Bool) -> Selector? {
-        switch event.charactersIgnoringModifiers?.lowercased() {
-        case "v": return #selector(NSText.paste(_:))
-        case "c": return #selector(NSText.copy(_:))
-        case "x": return #selector(NSText.cut(_:))
-        case "a": return #selector(NSText.selectAll(_:))
-        case "z": return shift ? Selector(("redo:")) : Selector(("undo:"))
-        default: return nil
-        }
     }
 }

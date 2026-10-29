@@ -276,6 +276,8 @@ struct AgentPolicyTests {
         "/Users/me/proj/a.swift", "/tmp/x.txt", "notes.txt", "/Users/me/.zshrc.bak", "/Users/me/.sshkeys/x",
         "/Users/me/Library/Application Support/Foo/x", "/var/folders/ab/T/x", "/usrlocal/x",
         "/Users/me/Library/Application Support/LocalFlow/agent/report.md",
+        // LocalFlow's memory file, which the agent keeps up to date.
+        "/Users/me/Library/Application Support/LocalFlow/Memory/flow-memory.md",
     ])
     func writesAllowed(path: String) {
         #expect(decide("Write", ["file_path": .string(path), "content": "x"]) == .allow)
@@ -293,6 +295,8 @@ struct AgentPolicyTests {
         "/Users/me/Applications/LocalFlow.app/Contents/MacOS/LocalFlow", "/Applications/LocalFlow.app/Contents/Info.plist",
         "/Users/me/Library/Application Support/LocalFlow/Sign in to Claude.command",
         "/Users/me/Library/Application Support/LocalFlow/ask-chats.json",
+        "/Users/me/Library/Application Support/LocalFlow/Memory/other.md",
+        "/Users/me/Library/Application Support/LocalFlow/Memory/../claude/settings.json",
         "/Users/me/Library/Application Support/LocalFlow/agent/CLAUDE.md", "/Users/me/Library/Preferences/com.localflow.plist",
         "/Users/me/Library/Preferences/com.apple.dock.plist",
     ])
@@ -305,6 +309,19 @@ struct AgentPolicyTests {
         #expect(summary.hasPrefix("Write "))
         #expect(key.hasPrefix("file:"))
         #expect(decide("Edit", ["file_path": .string(path)]) != .allow)
+    }
+
+    @Test("changing the standing instructions in localflow.md asks first, in plain words")
+    func standingInstructions() {
+        let path = "/Users/me/Library/Application Support/LocalFlow/Memory/localflow.md"
+        let decision = decide("Edit", ["file_path": .string(path), "old_string": "a", "new_string": "b"])
+        guard case .ask(let summary, let key) = decision else {
+            Issue.record("expected ask")
+            return
+        }
+        #expect(summary == "Change your standing instructions (localflow.md)")
+        #expect(key == "file:" + path)
+        #expect(bash("echo always >> '\(path)'") != .allow)
     }
 
     @Test("a link to a protected file counts as that file")
@@ -473,9 +490,35 @@ struct AgentPolicyTests {
 
     // MARK: Anything else
 
-    @Test("tools LocalFlow doesn't know ask", arguments: ["mcp__other__send", "NotebookEdit", "Task", "MultiEdit"])
+    @Test("tools LocalFlow doesn't know ask", arguments: ["MultiEdit", "CronCreate"])
     func unknownTools(tool: String) {
         #expect(decide(tool, [:]) == .ask(summary: "Use \(tool)", grantKey: "tool:\(tool)"))
         #expect(decide(tool, [:], grants: ["tool:\(tool)"]) == .allow)
+    }
+
+    @Test("Claude Code's own helpers just run: tool search, subagents, stopping its own background task")
+    func claudeCodeHelpers() {
+        #expect(decide("ToolSearch", ["query": "select:WebFetch"]) == .allow)
+        #expect(decide("Task", ["description": "look", "prompt": "find the config"]) == .allow)
+        #expect(decide("TaskStop", ["task_id": "b1"]) == .allow)
+    }
+
+    @Test("a background watch is held to the same rules as the command it runs")
+    func monitorCommand() {
+        #expect(decide("Monitor", ["command": "tail -f /tmp/build.log", "description": "x"]) == .allow)
+        #expect(grantKey(decide("Monitor", ["command": "rm -rf ~/Documents", "description": "x"])) != nil)
+        #expect(grantKey(decide("Monitor", ["description": "x"])) == "Bash:unknown")
+    }
+
+    @Test("a live connection watch asks first")
+    func monitorSocket() {
+        let decision = decide("Monitor", ["ws": ["url": "wss://example.com/feed"], "description": "x"])
+        #expect(grantKey(decision) == "Monitor:ws")
+    }
+
+    @Test("notebook edits follow the same file rules as edits")
+    func notebookEdit() {
+        #expect(decide("NotebookEdit", ["notebook_path": "/Users/me/work/a.ipynb", "new_source": "x"]) == .allow)
+        #expect(grantKey(decide("NotebookEdit", ["notebook_path": "/Users/me/.ssh/a.ipynb", "new_source": "x"])) != nil)
     }
 }

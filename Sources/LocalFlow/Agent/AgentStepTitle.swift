@@ -15,6 +15,7 @@ enum AgentStepTitle {
         if toolName.hasPrefix(screenPrefix) {
             return screen(String(toolName.dropFirst(screenPrefix.count)), input: input, target: target)
         }
+        if let connector = ConnectorTool(toolName: toolName) { return connector.summary }
         switch toolName {
         case "Bash":
             let said = text("description").trimmingCharacters(in: .whitespacesAndNewlines)

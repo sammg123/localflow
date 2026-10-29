@@ -277,13 +277,14 @@ struct AgentPlacementTests {
 @MainActor
 @Suite("Agent panel: rendering")
 struct AgentPanelRenderTests {
-    private func render(_ model: AgentModel, name: String) throws {
-        let view = AgentPanelView(model: model, followUpHint: "Right ⌥, then ⌘Return to give it more",
-                                  scrolls: false)
+    private func render(_ model: AgentModel, name: String, input: ComposerModel? = nil,
+                        showsInput: Bool = false) throws {
+        let view = AgentPanelView(model: model, input: input ?? ComposerModel(), showsInput: showsInput,
+                                  followUpHint: "⌘ to give it more  ·  Right ⌥ to ask", scrolls: false)
         let renderer = ImageRenderer(content: view)
         renderer.scale = 2
         let image = try #require(renderer.nsImage)
-        #expect(image.size.width == AgentPanelView.width)
+        #expect(image.size.width == (showsInput ? AgentPanelView.inputWidth : AgentPanelView.width))
         guard let dir = ProcessInfo.processInfo.environment["LOCALFLOW_SNAPSHOT_DIR"],
               let tiff = image.tiffRepresentation,
               let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return }
@@ -292,7 +293,7 @@ struct AgentPanelRenderTests {
 
     private func working() -> AgentModel {
         let model = AgentModel()
-        model.start(task: "Find the invoice PDF from Acme in my Downloads and email it to Brady")
+        model.start(task: "Find the invoice PDF from Acme in my Downloads and email it to Dana")
         model.status = .working
         for (index, title) in ["Search Downloads for “Acme”", "Read invoice-2026-10.pdf", "Open Mail",
                                "Look at the screen", "Click New Message", "Type the message"].enumerated() {
@@ -318,10 +319,50 @@ struct AgentPanelRenderTests {
         _ = model.clearApprovals()
         model.endRunningSteps(as: .done)
         model.status = .done
-        model.reply = "Sent the Acme invoice (invoice-2026-10.pdf, 212 KB) to Brady from your Gmail account."
+        model.reply = "Sent the Acme invoice (invoice-2026-10.pdf, 212 KB) to Dana from your Gmail account."
         try render(model, name: "done")
 
         model.status = .failed(AskError.claudeOutOfUsage(resetsAt: nil, detail: nil).message)
         try render(model, name: "failed")
+    }
+
+    @Test("an Instant run shows its stages, then the summary with Undo")
+    func instantRun() throws {
+        let model = AgentModel()
+        model.start(task: "make the save button round", instant: true)
+        model.status = .working
+        model.addStep(id: "screen", title: "Viewing screen")
+        model.finishStep(id: "screen", state: .done)
+        model.addStep(id: "project", title: "Locating project")
+        try render(model, name: "instant-locating")
+
+        model.retitle(id: "project", title: "Northwind")
+        model.finishStep(id: "project", state: .done)
+        model.addStep(id: "profile", title: "Reading design profile")
+        model.finishStep(id: "profile", state: .done)
+        model.addStep(id: "change", title: "Making the Save button round instead of square")
+        try render(model, name: "instant-changing")
+
+        model.endRunningSteps(as: .done)
+        model.status = .done
+        model.canUndo = true
+        model.reply = "Rounded the Save button in the job header (corner radius 8 to full), matching the pill buttons in your design profile."
+        try render(model, name: "instant-done")
+    }
+
+    @Test("the box in the agent's window renders green in agent mode, with Instant on, and blue for Ask")
+    func inputBox() throws {
+        let model = working()
+        let input = ComposerModel()
+        input.reset(mode: .typing, agentMode: true)
+        input.text = "Also attach the receipt"
+        try render(model, name: "input-agent", input: input, showsInput: true)
+
+        _ = input.toggleInstant()
+        try render(model, name: "input-instant", input: input, showsInput: true)
+
+        input.toggleAgentMode()
+        input.text = ""
+        try render(model, name: "input-ask", input: input, showsInput: true)
     }
 }

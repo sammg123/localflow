@@ -54,6 +54,8 @@ final class AskController {
     private let captureScreen: ScreenCapture
     /// How many of the current chat's turns a follow-up carries (read per ask).
     private let memoryLimit: @MainActor () -> Int
+    /// LocalFlow's memory files, read fresh for every question; none in most tests.
+    private let flowMemory: FlowMemory?
     private let settings = Settings.shared
     /// Every finished answer; never in the event log.
     let chats: AskChatStore
@@ -78,10 +80,12 @@ final class AskController {
          indicator: ListeningIndicator? = nil,
          capture: @escaping ScreenCapture = AskController.captureDisplay,
          memoryLimit: @escaping @MainActor () -> Int = { Settings.shared.askMemoryTurns },
+         memory: FlowMemory? = nil,
          chats: AskChatStore? = nil,
          closeHint: String) {
         fixedClient = client
         self.memoryLimit = memoryLimit
+        flowMemory = memory
         self.chats = chats ?? AskChatStore(fileURL: nil)
         answerPanel = surface ?? AnswerPanel(closeHint: closeHint)
         glow = indicator ?? ScreenGlow()
@@ -224,8 +228,11 @@ final class AskController {
 
         let history = AskMemory.fitting(chats.memory(limit: memoryLimit()), budget: AskLimits.historyBudget)
         let body = OllamaChatBody.ask(model: settings.effectiveAskModel, question: question,
-                                      imageBase64: png.base64EncodedString(), history: history)
+                                      imageBase64: png.base64EncodedString(), history: history,
+                                      memory: flowMemory?.promptSection(for: .ask) ?? "")
         var firstToken: Duration?
+        // Everything the engine sent, remember tags included; the bubble shows it without them.
+        var raw = ""
         do {
             for try await token in client.stream(body) {
                 guard isCurrent() else { return }
@@ -234,15 +241,18 @@ final class AskController {
                     model.phase = .answering
                     updateOutline()
                 }
-                model.answer += token
+                raw += token
+                model.answer = RememberTags.split(raw).visible
             }
             guard isCurrent() else { return }
-            guard !model.answer.isEmpty else {
+            let reply = RememberTags.split(raw)
+            guard !reply.visible.isEmpty else {
                 fail("The model sent back an empty answer. Ask again.")
                 return
             }
             model.phase = .done
-            chats.record(question: question, answer: model.answer, in: askedIn, joinsConversation: epoch == memoryEpoch)
+            chats.record(question: question, answer: reply.visible, in: askedIn, joinsConversation: epoch == memoryEpoch)
+            flowMemory?.remember(RememberTags.allowed(reply.notes, question: question))
             FlowLog.shared.write("ask answered: question \(question.count) chars, image \(png.count / 1024) KB, "
                 + "first token \(firstToken.map { "\($0)" } ?? "-"), \(model.answer.count) chars in \(started.duration(to: .now))")
         } catch {

@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 
 /// The optional on-device LLM cleanup stage (Apple FoundationModels).
@@ -46,12 +47,16 @@ final class AppController {
 
     var hotkeyMonitor: HotkeyMonitor!
     /// Nil when Ask is off or its key collides with the dictation key.
-    private var askHotkeyMonitor: HotkeyMonitor?
-    private var ask: AskController!
-    private var askSession: AskSession!
-    private var askChats: AskHistoryWindowController!
-    /// Do it in the Ask window: the agent that uses the Mac.
-    private var agent: AgentController!
+    var askHotkeyMonitor: HotkeyMonitor?
+    var ask: AskController!
+    var askSession: AskSession!
+    var askChats: AskHistoryWindowController!
+    /// The agent that uses the Mac, and its window (where Ask's box goes while it's up).
+    var agent: AgentController!
+    var agentPanel: AgentPanel!
+    /// Keeps the agent's connected servers current as connectors change.
+    var connectorWatch: AnyCancellable?
+    var connectorRefreshes = 0
     var menuBar: MenuBarController!
     var hud: HUDPanel!
     /// The double-tap window: talk, pause to edit, Return to paste.
@@ -107,27 +112,7 @@ final class AppController {
         menuBar = MenuBarController(controller: self)
         settingsWindow = SettingsWindowController(controller: self)
         llmPolisher = TranscriberFactory.makeLLMPolisher()
-        ask = AskController(chats: AskChatStore(fileURL: AskChatStore.defaultURL), closeHint: askCloseHint)
-        askChats = AskHistoryWindowController(store: ask.chats) { [weak self] id in self?.continueAskChat(id) }
-        let composer = AskComposerPanel()
-        askSession = AskSession(
-            mic: self,
-            composer: composer,
-            answers: ask,
-            transcribe: rawTranscribe,
-            canOpen: { [weak self] in self?.askCanOpen() ?? false },
-            swallowPress: { [weak self] in self?.askHotkeyMonitor?.swallowCurrentPress() }
-        )
-        agent = AgentController()
-        askSession.onTask = { [weak self] task, screen in self?.agent.run(task, on: screen) }
-        // Esc closes the Ask window or the answer, from any app, while one is up.
-        askSession.onPhaseChange = { [weak self] _ in self?.updateAskEscape() }
-        ask.onChange = { [weak self] in self?.updateAskEscape() }
-        ask.onOpenChats = { [weak self] in self?.showAskChats() }
-        composer.onOpenChats = { [weak self] in
-            self?.askSession.closeKeepingDraft()
-            self?.showAskChats()
-        }
+        setUpAsk()
 
         handsFree = makeHandsFreeSession()
 
@@ -247,23 +232,6 @@ final class AppController {
 
     func showAskChats() {
         askChats.show()
-    }
-
-    /// From the Chats window: the next question joins that chat, and the Ask window opens
-    /// over the app that was in front, ready for typing.
-    private func continueAskChat(_ id: AskChat.ID) {
-        ask.chats.continueChat(id)
-        askChats.close()
-        NSApp.deactivate()
-        Task { @MainActor [weak self] in
-            // Open once the app that was in front has taken over again, so it can't take
-            // the keyboard back from the Ask window (at most 0.6 s).
-            let me = ProcessInfo.processInfo.processIdentifier
-            for _ in 0..<12 where NSWorkspace.shared.frontmostApplication?.processIdentifier == me {
-                try? await Task.sleep(for: .milliseconds(50))
-            }
-            self?.askSession.openForTyping()
-        }
     }
 
     func engineChanged() {
@@ -427,71 +395,6 @@ final class AppController {
         case .processing:
             break
         }
-    }
-
-    // MARK: - Ask key
-
-    private var askKeyName: String {
-        AskKeyChoice.effectiveHotkey(ask: settings.askKey, dictation: settings.hotkey)?.shortName ?? "Ask key"
-    }
-
-    private var askCloseHint: String {
-        "Esc to minimize   ·   ⇧Esc to close   ·   \(askKeyName) to ask again"
-    }
-
-    private func updateAskEscape() {
-        // Live while the chip is up too: Esc brings it back, Shift+Esc closes it.
-        askHotkeyMonitor?.escapeEnabled = askSession.phase.isOpen || ask.presence != .none
-    }
-
-    /// Esc cancels the Ask window, or tucks the answer away and back; Shift+Esc closes it.
-    private func askEscape(shift: Bool) {
-        switch AskEscape.action(shift: shift, windowOpen: askSession.phase.isOpen, answer: ask.presence) {
-        case .cancelWindow: askSession.cancel()
-        case .close: ask.dismiss()
-        case .minimize: ask.minimize()
-        case .expand: ask.expand()
-        case nil: break
-        }
-    }
-
-    private func configureAskHotkey() {
-        // The old monitor's release would never arrive: close an Ask in progress first.
-        askSession.cancel()
-        askHotkeyMonitor?.stopMonitoring()
-        askHotkeyMonitor = nil
-        ask.updateCloseHint(askCloseHint)
-        askSession.keyName = askKeyName
-        agent.setFollowUpHint("\(askKeyName), then ⌘Return to give it more")
-        guard let key = AskKeyChoice.effectiveHotkey(ask: settings.askKey, dictation: settings.hotkey) else { return }
-        let monitor = HotkeyMonitor(choice: key)
-        let now = { ProcessInfo.processInfo.systemUptime }
-        monitor.onPressBegan = { [weak self] _ in self?.askSession.keyDown(at: now()) }
-        monitor.onPressEnded = { [weak self] held in self?.askSession.keyUp(held: held, at: now()) }
-        // The monitor reports a second quick tap as a double-tap; to Ask it's a plain release.
-        monitor.onDoubleTap = { [weak self] in self?.askSession.keyUp(held: 0, at: now()) }
-        monitor.onKeyDownWhileHeld = { [weak self] in self?.askSession.otherKey() }
-        monitor.onEscape = { [weak self] in self?.askEscape(shift: false) }
-        monitor.onShiftEscape = { [weak self] in self?.askEscape(shift: true) }
-        monitor.startMonitoring()
-        askHotkeyMonitor = monitor
-        updateAskEscape()
-    }
-
-    /// Checked before the Ask window first appears: it can't see the screen without this.
-    private func askCanOpen() -> Bool {
-        // Both windows sit where the pill does; the dictation one is in use.
-        guard !handsFree.isOpen else {
-            NSSound.beep()
-            return false
-        }
-        guard Permissions.screenRecordingGranted else {
-            Permissions.requestScreenRecording()
-            SoundPlayer.playError()
-            hud.flash("Ask needs Screen Recording. Turn on LocalFlow in System Settings, then ask again", seconds: 4)
-            return false
-        }
-        return true
     }
 
     private func cancelDictation() {

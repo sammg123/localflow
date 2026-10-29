@@ -82,11 +82,20 @@ final class AgentModel: ObservableObject {
     @Published var reply = ""
     /// For the elapsed counter in the header.
     @Published private(set) var startedAt = Date()
+    /// An Instant Edits run: its steps are the fixed stages, not every tool call.
+    @Published private(set) var isInstant = false
+    /// The Instant edit just made can still be put back.
+    @Published var canUndo = false
+    /// Steps on the screen wait while the user types in the agent's window.
+    @Published var isHeld = false
     /// Steps dropped off the front of a long task, still counted as earlier.
     private var dropped = 0
 
-    func start(task: String) {
+    func start(task: String, instant: Bool = false) {
         self.task = task
+        isInstant = instant
+        canUndo = false
+        isHeld = false
         status = .starting
         steps = []
         approvals = []

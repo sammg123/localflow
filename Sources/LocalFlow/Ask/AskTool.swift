@@ -8,6 +8,7 @@ enum AskToolPrompt {
     and this message.
     """
 
+
     /// The chat so far and the question, without the instructions.
     static func message(from body: OllamaChatBody) -> String {
         let messages = body.messages.filter { $0.role != "system" }
@@ -23,9 +24,15 @@ enum AskToolPrompt {
         return parts.joined(separator: "\n\n")
     }
 
+    /// LocalFlow's memory when the body carries it, then the chat so far and the question.
+    /// The memory goes with the message, never on a command line other programs can read.
+    static func fullMessage(from body: OllamaChatBody) -> String {
+        body.memory.isEmpty ? message(from: body) : body.memory + "\n\n" + message(from: body)
+    }
+
     /// The instructions and the message together, for a tool with no system prompt.
     static func make(from body: OllamaChatBody) -> String {
-        instructions + "\n\n" + message(from: body)
+        instructions + "\n\n" + fullMessage(from: body)
     }
 }
 

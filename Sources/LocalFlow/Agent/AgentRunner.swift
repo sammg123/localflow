@@ -10,12 +10,16 @@ final class AgentRunner: @unchecked Sendable {
     /// How long Claude Code gets to finish after its input closes before it's stopped.
     static let closeGrace: Duration = .seconds(2)
     static let deniedMessage = "The user didn't allow this."
+    /// The MCP config's name in the session's private folder.
+    static let configName = "mcp.json"
+    /// The appended system prompt: instructions and memory, kept out of the arguments.
+    static let promptName = "prompt.md"
 
     let events: AsyncStream<AgentEvent>
     private let continuation: AsyncStream<AgentEvent>.Continuation
     private let executable: String?
     private let model: String
-    private let effort: String
+    private let options: AgentRunOptions
     private let displayID: UInt32
     private let mcpExecutable: String
     private let home: String
@@ -54,14 +58,14 @@ final class AgentRunner: @unchecked Sendable {
         let errorOutput: FileHandle
     }
 
-    init(executable: String? = ClaudeInvocation.locate(), model: String, effort: String = AgentInvocation.defaultEffort,
+    init(executable: String? = ClaudeInvocation.locate(), model: String, options: AgentRunOptions = AgentRunOptions(),
          displayID: UInt32, mcpExecutable: String = Bundle.main.executablePath ?? "", home: String = NSHomeDirectory(),
          configDirectory: String = ClaudeInvocation.configDirectory(), sessionLimit: Duration = sessionLimit,
          closeGrace: Duration = closeGrace, log: @escaping @Sendable (String) -> Void = { FlowLog.shared.write($0) }) {
         (events, continuation) = AsyncStream.makeStream(of: AgentEvent.self)
         self.executable = executable
         self.model = model
-        self.effort = effort
+        self.options = options
         self.displayID = displayID
         self.mcpExecutable = mcpExecutable
         self.home = home
@@ -95,7 +99,7 @@ final class AgentRunner: @unchecked Sendable {
             return finish(.claudeMissing)
         }
         guard AskTool.isValidModel(model) else { return finish(.claude("the model name in Settings (\(model)) isn't valid")) }
-        guard AskTool.isValidModel(effort) else { return finish(.claude("the effort setting (\(effort)) isn't valid")) }
+        guard AskTool.isValidModel(options.effort) else { return finish(.claude("the effort setting (\(options.effort)) isn't valid")) }
         log("agent: starting")
         // Folders and files are set up off the caller's thread, which is usually the main one.
         Task.detached {
@@ -173,10 +177,14 @@ final class AgentRunner: @unchecked Sendable {
         let workingDirectory = try AgentFiles.makeWorkingDirectory(home: home)
         let folder = try AgentFiles.makeFolder()
         locked { $0.folder = folder }
-        let config = folder.appendingPathComponent("mcp.json")
+        let config = folder.appendingPathComponent(Self.configName)
+        let prompt = folder.appendingPathComponent(Self.promptName)
         let errors = folder.appendingPathComponent("stderr.txt")
-        let configData = AgentInvocation.mcpConfig(executable: mcpExecutable, displayID: displayID)
+        let configData = AgentInvocation.mcpConfig(executable: mcpExecutable, displayID: displayID,
+                                                   servers: options.servers)
         guard files.createFile(atPath: config.path, contents: configData, attributes: AskTool.privateFile),
+              files.createFile(atPath: prompt.path, contents: Data(options.appendPrompt.utf8),
+                               attributes: AskTool.privateFile),
               files.createFile(atPath: errors.path, contents: nil, attributes: AskTool.privateFile) else {
             throw AskError.claude("couldn't write the agent's settings to a temporary folder")
         }
@@ -184,7 +192,8 @@ final class AgentRunner: @unchecked Sendable {
         let output = Pipe()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = AgentInvocation.arguments(model: model, effort: effort, mcpConfigPath: config.path, home: home)
+        process.arguments = AgentInvocation.arguments(model: model, effort: options.effort, mcpConfigPath: config.path,
+                                                      promptPath: prompt.path, home: home, tools: options.tools)
         process.environment = AgentInvocation.environment(home: home, tmp: files.temporaryDirectory.path,
                                                           configDirectory: configDirectory,
                                                           toolFolder: ClaudeInvocation.folder(of: executable))
@@ -237,6 +246,7 @@ final class AgentRunner: @unchecked Sendable {
 
     private func handle(_ line: String, process: Process) {
         for event in AgentStream.parse(line: line) {
+            if case .sessionStarted = event { removeConfig() }
             let (forward, stop) = locked { review(event, &$0) }
             if stop {
                 log("agent: stopping (\(locked { $0.fatal?.logName ?? "" }))")
@@ -244,6 +254,13 @@ final class AgentRunner: @unchecked Sendable {
             }
             if forward { continuation.yield(event) }
         }
+    }
+
+    /// Claude Code has read its MCP config by the time it says hello. The file can hold
+    /// connector tokens, so it goes then, before the agent can do anything, not at the end.
+    private func removeConfig() {
+        guard let folder = locked({ $0.folder }) else { return }
+        try? FileManager.default.removeItem(at: folder.appendingPathComponent(Self.configName))
     }
 
     /// Whether to pass `event` on, and whether it means the session can't go on: not

@@ -151,7 +151,7 @@ struct ClaudeClient: AskModelClient {
 
         let input = dir.appendingPathComponent("message.jsonl")
         let errors = dir.appendingPathComponent("stderr.txt")
-        let message = ClaudeInvocation.input(text: AskToolPrompt.message(from: body), imageBase64: image)
+        let message = ClaudeInvocation.input(text: AskToolPrompt.fullMessage(from: body), imageBase64: image)
         guard files.createFile(atPath: input.path, contents: message, attributes: AskTool.privateFile),
               files.createFile(atPath: errors.path, contents: nil, attributes: AskTool.privateFile) else {
             throw AskError.claude("couldn't write the screenshot to a temporary folder")

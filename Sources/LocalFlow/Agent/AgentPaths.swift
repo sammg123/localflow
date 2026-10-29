@@ -106,12 +106,24 @@ enum AgentPaths {
     }
 
     /// LocalFlow's own files (its sign-in script, Claude settings, chats), but not the
-    /// agent's working folder among them, apart from the notes Claude Code reads there.
+    /// agent's working folder among them, apart from the notes Claude Code reads there,
+    /// nor the memory file the agent keeps up to date. The standing instructions
+    /// (localflow.md) stay protected: only the user's say-so changes them.
     private static func isLocalFlowFile(_ lower: String, home: String) -> Bool {
         let folder = (home + "/Library/Application Support/LocalFlow").lowercased()
         let agent = AgentInvocation.workingDirectory(home: home).lowercased()
         let notes = ["claude.md", "claude.local.md"].map { agent + "/" + $0 }
+        guard lower != memoryFile(home: home).lowercased() else { return false }
         return isInside(lower, folder) && (!isInside(lower, agent) || notes.contains(lower))
+    }
+
+    /// LocalFlow's memory file (flow-memory.md) and standing instructions (localflow.md).
+    static func memoryFile(home: String) -> String {
+        FlowMemory(folder: FlowMemory.defaultFolder(home: home)).memoryURL.standardizedFileURL.path
+    }
+
+    static func instructionsFile(home: String) -> String {
+        FlowMemory(folder: FlowMemory.defaultFolder(home: home)).instructionsURL.standardizedFileURL.path
     }
 
     /// `path` is `folder` or somewhere under it.

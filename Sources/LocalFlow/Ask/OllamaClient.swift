@@ -62,28 +62,34 @@ struct OllamaChatBody: Encodable, Equatable {
     let think: Bool
     let keepAlive: String
     let options: Options
+    /// LocalFlow's memory, already at the end of the system message; kept apart too so
+    /// the tools can send it with the message. Never sent as a field of its own.
+    let memory: String
 
     enum CodingKeys: String, CodingKey {
         case model, messages, stream, think, options
         case keepAlive = "keep_alive"
     }
 
+    /// `memory` is FlowMemory's section for Ask, added after the system prompt.
     static func ask(model: String, question: String, imageBase64: String,
-                    history: [AskTurn] = []) -> OllamaChatBody {
+                    history: [AskTurn] = [], memory: String = "") -> OllamaChatBody {
         let earlier = history.flatMap { turn in
             [Message(role: "user", content: turn.question, images: nil),
              Message(role: "assistant", content: turn.answer, images: nil)]
         }
+        let system = memory.isEmpty ? systemPrompt : systemPrompt + "\n\n" + memory
         return OllamaChatBody(
             model: model,
-            messages: [Message(role: "system", content: systemPrompt, images: nil)]
+            messages: [Message(role: "system", content: system, images: nil)]
                 + earlier
                 + [Message(role: "user", content: question, images: [imageBase64])],
             stream: true,
             // Thinking mode took over 5 minutes per answer on qwen3.5:9b in testing.
             think: false,
             keepAlive: keepAlive,
-            options: Options(temperature: 0.2, numCtx: 8192, numPredict: 700)
+            options: Options(temperature: 0.2, numCtx: 8192, numPredict: 700),
+            memory: memory
         )
     }
 }

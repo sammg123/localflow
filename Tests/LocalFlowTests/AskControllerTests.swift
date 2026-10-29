@@ -505,10 +505,12 @@ struct AskControllerMemoryTests {
     func memorySurvivesRestart() async {
         let file = FileManager.default.temporaryDirectory
             .appendingPathComponent("localflow-chats-\(UUID())/ask-chats.json")
+        let saved = AskChatStore(fileURL: file)
         let before = AskController(client: client, surface: surface, indicator: FakeIndicator(),
                                    capture: { _ in Data([1]) }, memoryLimit: { 5 },
-                                   chats: AskChatStore(fileURL: file), closeHint: "")
+                                   chats: saved, closeHint: "")
         await ask(before, "What's this slide?")
+        saved.flush() // the app flushes on quit; saves are written in the background
 
         let after = AskController(client: client, surface: FakeSurface(), indicator: FakeIndicator(),
                                   capture: { _ in Data([1]) }, memoryLimit: { 5 },

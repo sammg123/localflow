@@ -194,6 +194,11 @@ final class Settings: ObservableObject {
         didSet { defaults.set(agentModel, forKey: "agentModel") }
     }
 
+    /// The agent never stops to ask first (like Claude Code with permissions skipped).
+    @Published var agentAlwaysAllow: Bool {
+        didSet { defaults.set(agentAlwaysAllow, forKey: "agentAlwaysAllow") }
+    }
+
     static let defaultAskModel = AskEngine.local.defaultModel
     static let defaultAgentModel = "claude-opus-5-5"
 
@@ -236,5 +241,6 @@ final class Settings: ObservableObject {
         askClaudeModel = defaults.string(forKey: "askClaudeModel") ?? AskEngine.claude.defaultModel
         askMemoryTurns = defaults.object(forKey: "askMemoryTurns") as? Int ?? 5
         agentModel = defaults.string(forKey: "agentModel") ?? Self.defaultAgentModel
+        agentAlwaysAllow = defaults.object(forKey: "agentAlwaysAllow") as? Bool ?? false
     }
 }

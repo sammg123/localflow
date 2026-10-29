@@ -10,6 +10,7 @@ final class FakeAgentSession: AgentSession, @unchecked Sendable {
     private(set) var started: [String] = []
     private(set) var sent: [String] = []
     private(set) var answers: [(id: String, allow: Bool, input: AgentJSON)] = []
+    private(set) var messages: [String?] = []
     private(set) var interrupts = 0
     private(set) var closes = 0
     /// Order of calls across the session and the panel, for "moved before allowed".
@@ -23,11 +24,16 @@ final class FakeAgentSession: AgentSession, @unchecked Sendable {
         continuation.finish()
     }
 
-    func start(task: String, imagePNGBase64: String?) { started.append(task) }
+    private(set) var startedImages: [String?] = []
+    func start(task: String, imagePNGBase64: String?) {
+        started.append(task)
+        startedImages.append(imagePNGBase64)
+    }
     func send(text: String, imagePNGBase64: String?) { sent.append(text) }
     func answer(requestID: String, allow: Bool, input: AgentJSON, message: String?) {
         journal("answer \(requestID) \(allow)")
         answers.append((requestID, allow, input))
+        messages.append(message)
     }
     func interrupt() { interrupts += 1 }
     func close() { closes += 1 }
@@ -41,6 +47,10 @@ final class FakeAgentSurface: AgentSurface {
     var onAnswer: ((AgentApproval, AgentAnswer) -> Void)?
     var onStop: (() -> Void)?
     var onClose: (() -> Void)?
+    var onInputClosed: (() -> Void)?
+    var onUndo: (() -> Void)?
+    /// The user is typing in the agent's window.
+    var isTakingInput = false
     private(set) var isVisible = false
     private(set) var hint = ""
     /// The panel's spot in global points; a click inside it makes it move.
@@ -69,24 +79,31 @@ struct AgentControllerTests {
     let surface = FakeAgentSurface()
     let glow = FakeIndicator()
 
-    private final class Made { var sessions: [FakeAgentSession] = [] }
+    private final class Made {
+        var sessions: [FakeAgentSession] = []
+        var options: [AgentRunOptions] = []
+    }
     private let made = Made()
     private var session: FakeAgentSession { made.sessions.last! }
 
-    private func makeController(target: String? = nil, frontApp: String? = nil,
+    private func makeController(target: String? = nil, frontApp: String? = nil, alwaysAllow: Bool = false,
+                                memory: String = "",
                                 lookUp: (@MainActor (CGPoint) async -> ClickTarget.Found)? = nil) -> AgentController {
         AgentController(
             surface: surface,
             indicator: glow,
-            makeSession: { [made] _, _ in
+            makeSession: { [made] _, _, options in
                 let session = FakeAgentSession()
                 made.sessions.append(session)
+                made.options.append(options)
                 return session
             },
             displayID: { _ in 1 },
             mapping: { _ in ScreenMapping(displayBounds: CGRect(x: 0, y: 0, width: 1280, height: 800)) },
             lookUp: lookUp ?? { _ in target.map { .named($0) } ?? .unnamed },
             frontApp: { frontApp },
+            alwaysAllow: { alwaysAllow },
+            memory: { memory },
             chime: {},
             finished: { _ in }
         )
@@ -464,6 +481,112 @@ struct AgentControllerTests {
         agent.run("next", on: nil)
         #expect(made.sessions.count == 2)
     }
+
+    @Test("a new session gets LocalFlow's memory after its instructions, read fresh each time")
+    func memoryReachesTheSession() {
+        let agent = makeController(memory: "## flow-memory.md\nNorthwind: ~/northwind, app.northwind.example")
+
+        agent.run("make the save button round", on: nil)
+
+        let prompt = made.options.first?.appendPrompt ?? ""
+        #expect(prompt.hasPrefix(AgentInvocation.instructions))
+        #expect(prompt.contains("Northwind: ~/northwind, app.northwind.example"))
+    }
+
+    @Test("a new session gets the connected servers")
+    func connectorsReachTheSession() {
+        let agent = makeController()
+        agent.connectorServers = ["github": .object(["type": "http", "url": "https://example.com/mcp/"])]
+
+        agent.run("open a pull request", on: nil)
+
+        #expect(made.options.first?.servers.keys.sorted() == ["github"])
+    }
+
+    // MARK: Typing in the agent's window
+
+    @Test("while the user types in the agent's window, screen steps wait, then run once the box closes")
+    func screenWaitsForTyping() async {
+        let agent = makeController()
+        agent.run("t", on: nil)
+        surface.isTakingInput = true
+
+        session.emit(.permissionRequest(requestID: "r1", toolName: "mcp__localflow__type",
+                                        input: ["text": "hello"], description: nil, toolUseID: "u1"))
+        try? await Task.sleep(for: .milliseconds(60))
+        #expect(session.answers.isEmpty)
+        #expect(surface.model.approvals.isEmpty)
+        #expect(surface.model.isHeld)
+
+        surface.isTakingInput = false
+        surface.onInputClosed?()
+        await until { !session.answers.isEmpty }
+
+        #expect(session.answers.map(\.allow) == [true])
+        #expect(!surface.model.isHeld)
+    }
+
+    @Test("terminal steps don't wait for the user's typing")
+    func terminalRunsWhileTyping() async {
+        let agent = makeController()
+        agent.run("t", on: nil)
+        surface.isTakingInput = true
+
+        session.emit(.permissionRequest(requestID: "r1", toolName: "Bash", input: bash("ls"), description: nil,
+                                        toolUseID: "u1"))
+        await until { !session.answers.isEmpty }
+
+        #expect(session.answers.map(\.allow) == [true])
+    }
+
+    @Test("Stop turns down screen steps still waiting on the user's typing")
+    func stopDeniesHeld() async {
+        let agent = makeController()
+        agent.run("t", on: nil)
+        session.emit(.sessionStarted(sessionID: "s"))
+        await until { surface.model.status == .working }
+        surface.isTakingInput = true
+        session.emit(.permissionRequest(requestID: "r1", toolName: "mcp__localflow__key",
+                                        input: ["keys": "cmd+w"], description: nil, toolUseID: "u1"))
+        try? await Task.sleep(for: .milliseconds(60))
+
+        agent.stop()
+
+        #expect(session.answers.map(\.allow) == [false])
+        surface.isTakingInput = false
+        surface.onInputClosed?()
+        try? await Task.sleep(for: .milliseconds(30))
+        #expect(session.answers.count == 1)
+    }
+
+    // MARK: Always allow
+
+    @Test("with Always allow on, risky steps run without a card")
+    func alwaysAllow() async {
+        let agent = makeController(alwaysAllow: true)
+        agent.run("t", on: nil)
+
+        session.emit(.permissionRequest(requestID: "r1", toolName: "Bash", input: bash("rm -rf build"),
+                                        description: nil, toolUseID: "u1"))
+        await until { !session.answers.isEmpty }
+
+        #expect(session.answers.map(\.allow) == [true])
+        #expect(surface.model.approvals.isEmpty)
+    }
+
+    @Test("Always allow still never clicks LocalFlow's own windows: the agent is told to look again")
+    func alwaysAllowSkipsOwnWindows() async {
+        let agent = makeController(alwaysAllow: true, lookUp: { _ in .localFlow })
+        agent.run("t", on: nil)
+
+        session.emit(.permissionRequest(requestID: "r1", toolName: "mcp__localflow__click", input: click(10, 10),
+                                        description: nil, toolUseID: "u1"))
+        await until { !session.answers.isEmpty }
+
+        #expect(session.answers.map(\.allow) == [false])
+        #expect(session.messages.first??.contains("screenshot") == true)
+        #expect(surface.model.approvals.isEmpty)
+    }
 }
 
 @Suite("Agent: steps in plain words")
@@ -491,7 +614,8 @@ struct AgentStepTitleTests {
         ("mcp__localflow__wait", .object(["seconds": .number(2)]), "Wait 2s"),
         ("mcp__localflow__drag", .object([:]), "Drag"),
         ("mcp__localflow__move", .object([:]), "Move the pointer"),
-        ("mcp__other__thing", .object([:]), "Use thing"),
+        ("mcp__other__thing", .object([:]), "Use other: thing"),
+            ("mcp__github__create_pull_request", .object([:]), "Use github: create pull request"),
     ])
     func titles(tool: String, input: AgentJSON, title: String) {
         #expect(AgentStepTitle.title(toolName: tool, input: input, target: nil) == title)

@@ -177,8 +177,9 @@ final class AgentFakeClaudes {
         """#)
     }
 
-    func runner(_ fake: Fake?, executable: String? = nil, log: AgentLogLines = AgentLogLines()) -> AgentRunner {
-        AgentRunner(executable: executable ?? fake?.path, model: "claude-sonnet-5-5", effort: "medium", displayID: 7,
+    func runner(_ fake: Fake?, executable: String? = nil, options: AgentRunOptions = AgentRunOptions(effort: "medium"),
+                log: AgentLogLines = AgentLogLines()) -> AgentRunner {
+        AgentRunner(executable: executable ?? fake?.path, model: "claude-sonnet-5-5", options: options, displayID: 7,
                     mcpExecutable: Self.mcpExecutable, home: fake?.home ?? NSTemporaryDirectory(),
                     configDirectory: "/tmp/localflow-claude-test", closeGrace: .milliseconds(500),
                     log: { log.write($0) })

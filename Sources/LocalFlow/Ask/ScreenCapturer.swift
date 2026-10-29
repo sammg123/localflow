@@ -29,6 +29,11 @@ enum ScreenCapturer {
         guard let displayID = screen.deviceDescription[key] as? CGDirectDisplayID else {
             throw AskError.screenCaptureFailed("no display under the mouse")
         }
+        return try await capturePNG(displayID: displayID)
+    }
+
+    /// The display, without LocalFlow's own windows.
+    static func capturePNG(displayID: CGDirectDisplayID) async throws -> Data {
         // All windows, not just on-screen ones, so LocalFlow is listed (and left out)
         // even in the instant before the outline and pill appear.
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)

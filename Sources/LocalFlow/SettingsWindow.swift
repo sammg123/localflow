@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 enum SettingsTab: String {
-    case general, dictionary, setup
+    case general, dictionary, connectors, setup
 }
 
 /// Shared between the controller and the SwiftUI view so show(tab:) can switch tabs
@@ -41,6 +41,13 @@ final class SettingsWindowController {
 }
 
 struct SettingsView: View {
+    /// Opens one of the memory files in the user's editor, making it first if it's missing.
+    private static func openMemory(_ file: KeyPath<FlowMemory, URL>) {
+        let memory = FlowMemory()
+        memory.ensureFiles()
+        NSWorkspace.shared.open(memory[keyPath: file])
+    }
+
     @ObservedObject var tabState: SettingsTabState
     weak var controller: AppController?
     @ObservedObject private var settings = Settings.shared
@@ -53,6 +60,9 @@ struct SettingsView: View {
             dictionaryTab
                 .tabItem { Label("Dictionary", systemImage: "character.book.closed") }
                 .tag(SettingsTab.dictionary)
+            ConnectorsSettingsView()
+                .tabItem { Label("Connectors", systemImage: "puzzlepiece.extension") }
+                .tag(SettingsTab.connectors)
             setupTab
                 .tabItem { Label("Setup", systemImage: "checkmark.shield") }
                 .tag(SettingsTab.setup)
@@ -122,9 +132,24 @@ struct SettingsView: View {
 
             TextField("Agent model:", text: $settings.agentModel, prompt: Text(Settings.defaultAgentModel))
             if settings.askEngine != .claude { ClaudeAccountRow() }
-            Text("Do it (or ⌘Return) in the Ask window hands the task to an agent that uses your Mac: it runs Terminal commands, reads and edits your files, and clicks and types in apps. Looking, reading and safe commands just run; anything that deletes, sends, buys, pushes, installs or uses sudo waits for your OK. It works on your Claude plan through LocalFlow's own Claude sign-in, so screenshots and what it reads go to Anthropic.")
+            Text("Tap ⌘ in the Ask window to switch to the agent (green), then Return hands it the task. It uses your Mac like Claude Code: it runs Terminal commands, reads and edits your files, and clicks and types in apps. Looking, reading and safe commands just run; anything that deletes, sends, buys, pushes, installs or uses sudo waits for your OK. ⌘I turns on Instant Edits for small UI changes. It works on your Claude plan through LocalFlow's own Claude sign-in, so screenshots and what it reads go to Anthropic.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            HStack {
+                Text("Memory:")
+                Button("localflow.md") { Self.openMemory(\.instructionsURL) }
+                Button("flow-memory.md") { Self.openMemory(\.memoryURL) }
+            }
+            Text("What Ask and the agent remember. localflow.md holds your standing instructions, like a CLAUDE.md of LocalFlow's own; flow-memory.md holds what they learn, like your projects and where they live. Both are read with every question and task, and added to when you say how you like things or when they work out which project you're in. They stay on this Mac, and go with each question to the model you picked.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Toggle("Always allow", isOn: $settings.agentAlwaysAllow)
+            Text(settings.agentAlwaysAllow
+                 ? "Everything the agent does runs without asking, including deleting, sending, buying, pushing and sudo. Turn this off to approve risky steps again."
+                 : "Risky steps wait for your OK. Turn this on to let the agent do everything without asking.")
+                .font(.caption)
+                .foregroundStyle(settings.agentAlwaysAllow ? Color.orange : .secondary)
+            InstantProjectsSettingsView()
 
             Divider()
 

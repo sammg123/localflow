@@ -1,11 +1,33 @@
 import Foundation
 
+/// What one session runs with besides the model: how hard it thinks, what it's told,
+/// which of Claude Code's tools it gets, and any connected MCP servers (by name).
+struct AgentRunOptions: Sendable, Equatable {
+    let effort: String
+    let appendPrompt: String
+    let tools: [String]
+    let servers: [String: AgentJSON]
+
+    init(effort: String = AgentInvocation.defaultEffort, appendPrompt: String = AgentInvocation.instructions,
+         tools: [String] = AgentInvocation.tools, servers: [String: AgentJSON] = [:]) {
+        self.effort = effort
+        self.appendPrompt = appendPrompt
+        self.tools = tools
+        self.servers = servers
+    }
+}
+
 /// How Claude Code is run as an agent on the user's Mac: headless, on LocalFlow's own
 /// Claude sign-in, asking LocalFlow before any tool it doesn't consider safe, with
 /// LocalFlow's screen tools as an MCP server.
 enum AgentInvocation {
-    /// Claude Code's own tools the agent gets. The screen tools come from the MCP server.
-    static let tools = ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "WebSearch", "TodoWrite"]
+    /// Claude Code's own tools the agent gets, as in Claude Code itself: the terminal (with
+    /// background tasks and watches), files, the web, subagents and tool search. Left out:
+    /// the ones that wait on a person at a terminal (questions, plan mode) or schedule work
+    /// for later. Names an older Claude Code lacks are ignored. The screen tools come from
+    /// the MCP server.
+    static let tools = ["Bash", "Read", "Write", "Edit", "NotebookEdit", "Glob", "Grep", "WebFetch", "WebSearch",
+                        "TodoWrite", "Task", "TaskStop", "Monitor", "ToolSearch"]
     static let defaultEffort = "medium"
     /// The name the screen tools' server goes by, so its tools are mcp__localflow__*.
     static let serverName = "localflow"
@@ -25,11 +47,16 @@ enum AgentInvocation {
     words with no headings, saying what you did.
     """
 
+    /// The instructions, then LocalFlow's memory files and when to add to them.
+    static func prompt(memory: String) -> String {
+        memory.isEmpty ? instructions : instructions + "\n\n" + memory
+    }
+
     /// Headless and streaming, permission prompts sent to LocalFlow on stdio, only
     /// LocalFlow's own user settings (no project settings, CLAUDE.md or the user's hooks),
     /// only LocalFlow's MCP server, nothing saved, and the home folder reachable.
-    static func arguments(model: String, effort: String, mcpConfigPath: String, home: String,
-                          appendPrompt: String = instructions) -> [String] {
+    static func arguments(model: String, effort: String, mcpConfigPath: String, promptPath: String, home: String,
+                          tools: [String] = tools) -> [String] {
         [
             "-p",
             "--input-format", "stream-json",
@@ -45,7 +72,7 @@ enum AgentInvocation {
             "--mcp-config", mcpConfigPath,
             "--no-session-persistence",
             "--add-dir", home,
-            "--append-system-prompt", appendPrompt,
+            "--append-system-prompt-file", promptPath,
             "--tools", tools.joined(separator: ","),
         ]
     }
@@ -83,11 +110,13 @@ enum AgentInvocation {
         home + "/Library/Application Support/LocalFlow/agent"
     }
 
-    /// Starts LocalFlow itself as the screen tools' server, for one display.
-    static func mcpConfig(executable: String, displayID: UInt32) -> Data {
-        let server: AgentJSON = ["type": "stdio", "command": .string(executable),
+    /// Starts LocalFlow itself as the screen tools' server, for one display, beside any
+    /// connected servers (by name). None of those can take the screen tools' name.
+    static func mcpConfig(executable: String, displayID: UInt32, servers: [String: AgentJSON] = [:]) -> Data {
+        let screen: AgentJSON = ["type": "stdio", "command": .string(executable),
                                  "args": ["--computer-mcp", "--display", .string(String(displayID))]]
-        let config: AgentJSON = ["mcpServers": .object([serverName: server])]
+        let all = servers.merging([serverName: screen]) { _, own in own }
+        let config: AgentJSON = ["mcpServers": .object(all)]
         return config.encoded()
     }
 

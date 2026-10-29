@@ -48,6 +48,8 @@ struct AgentPanelView: View {
     var onOpenConnectors: () -> Void = {}
     /// Puts back the files an Instant edit changed.
     var onUndo: () -> Void = {}
+    /// Picks the project's folder when an Instant run asked which project.
+    var onChooseProject: () -> Void = {}
     var onCollapse: () -> Void = {}
     var onExpand: () -> Void = {}
     /// The window is being dragged. It follows the real pointer; only the first move's
@@ -313,33 +315,34 @@ struct AgentPanelView: View {
                 .foregroundStyle(AgentStyle.secondary.opacity(0.8))
                 .lineLimit(1)
             Spacer(minLength: 0)
+            if model.canChooseProject, !model.status.isWorking {
+                footerButton("Choose Folder…", systemImage: "folder", action: onChooseProject)
+                    .accessibilityLabel("Choose the project's folder")
+                    .help("Pick the project's top folder, and LocalFlow remembers it")
+            }
             if model.canUndo, !model.status.isWorking {
-                Button(action: onUndo) {
-                    Label("Undo", systemImage: "arrow.uturn.backward")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 12)
-                        .frame(height: 28)
-                        .background(Capsule().fill(Color.white.opacity(0.14)))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Undo the Instant edit")
-                .help("Put the changed files back as they were")
+                footerButton("Undo", systemImage: "arrow.uturn.backward", action: onUndo)
+                    .accessibilityLabel("Undo the Instant edit")
+                    .help("Put the changed files back as they were")
             }
             if model.status.isWorking {
-                Button(action: onStop) {
-                    Label("Stop", systemImage: "stop.fill")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 12)
-                        .frame(height: 28)
-                        .background(Capsule().fill(Color.white.opacity(0.14)))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Stop the agent")
-                .help("Stop the agent")
+                footerButton("Stop", systemImage: "stop.fill", action: onStop)
+                    .accessibilityLabel("Stop the agent")
+                    .help("Stop the agent")
             }
         }
+    }
+
+    private func footerButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12)
+                .frame(height: 28)
+                .background(Capsule().fill(Color.white.opacity(0.14)))
+        }
+        .buttonStyle(.plain)
     }
 }
 

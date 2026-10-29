@@ -24,6 +24,10 @@ struct InstantPipelineTests {
         var profileRoot: String?
     }
 
+    private final class Order: @unchecked Sendable {
+        var steps: [String] = []
+    }
+
     private func pipeline(_ box: InstantSandbox, _ result: InstantSweepResult, seen: Seen = Seen(),
                           screenshot: String? = "iVBORw0K") -> InstantPipeline {
         InstantPipeline(capture: { screenshot }, sweep: FakeSweep(result: result, seen: seen),
@@ -41,7 +45,7 @@ struct InstantPipelineTests {
 
     private func run(_ pipeline: InstantPipeline) async -> (InstantOutcome, [InstantStage]) {
         var stages: [InstantStage] = []
-        let outcome = await pipeline.run(request: Self.request, memory: "Sundial: ~/code/app",
+        let outcome = await pipeline.run(request: Self.request, memory: { "Sundial: ~/code/app" },
                                          recent: ["Sundial: made the header bold"]) { stages.append($0) }
         return (outcome, stages)
     }
@@ -114,8 +118,44 @@ struct InstantPipelineTests {
         defer { box.cleanUp() }
         let (outcome, stages) = await run(pipeline(box, small(nil)))
         #expect(outcome == .stopped(.needsProject(InstantStop.whichProject)))
-        #expect(InstantStop.whichProject == "Which project is this? Tell me its folder or name and I'll remember it.")
+        #expect(InstantStop.whichProject == "Which project is this? Choose its folder, or tell me its name.")
+        #expect(InstantStop.projectNotFound("Sundial") == "I couldn't find the folder for Sundial. Choose its folder, or tell me where it is.")
         #expect(stages == [.viewingScreen, .locatingProject])
+    }
+
+    @Test("the memory is read once the screen is seen, so finding the Mac's folders doesn't hold up the screenshot")
+    func memoryAfterScreen() async throws {
+        let box = try InstantSandbox()
+        defer { box.cleanUp() }
+        let order = Order()
+        let pipeline = InstantPipeline(capture: { order.steps.append("screen"); return "iVBORw0K" },
+                                       sweep: FakeSweep(result: small(nil), seen: Seen()), home: box.home)
+
+        _ = await pipeline.run(request: Self.request, memory: { order.steps.append("memory"); return "" },
+                               recent: []) { _ in }
+
+        #expect(order.steps == ["screen", "memory"])
+    }
+
+    @Test("a project the user chose is used, whichever one the sweep names; a big edit still stops")
+    func chosen() async throws {
+        let box = try InstantSandbox()
+        defer { box.cleanUp() }
+        let app = try box.homeProject("northwind")
+        let chosen = InstantProject(name: "northwind", path: app)
+        for result in [small(nil), small(try box.homeProject("other"), name: "Other")] {
+            let outcome = await pipeline(box, result).run(request: Self.request, project: chosen, memory: { "" },
+                                                          recent: []) { _ in }
+            guard case .ready(let plan) = outcome else {
+                Issue.record("not ready: \(outcome)")
+                continue
+            }
+            #expect(plan.project == InstantProject(name: "northwind",
+                                                   path: try #require(InstantFolders.projectRoot(app, home: box.home))))
+        }
+        let big = InstantSweepResult(verdict: .tooBig("It rebuilds the whole calendar."), project: nil, change: "")
+        let outcome = await pipeline(box, big).run(request: Self.request, project: chosen, memory: { "" }, recent: []) { _ in }
+        #expect(outcome == .stopped(.tooBig("It rebuilds the whole calendar.")))
     }
 
     @Test("a folder that isn't a project under home counts as unknown")

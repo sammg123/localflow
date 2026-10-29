@@ -49,6 +49,7 @@ final class FakeAgentSurface: AgentSurface {
     var onClose: (() -> Void)?
     var onInputClosed: (() -> Void)?
     var onUndo: (() -> Void)?
+    var onChooseProject: (() -> Void)?
     /// The user is typing in the agent's window.
     var isTakingInput = false
     private(set) var isVisible = false

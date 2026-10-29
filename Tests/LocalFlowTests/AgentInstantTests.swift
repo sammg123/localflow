@@ -15,6 +15,8 @@ struct AgentInstantTests {
         var models: [String] = []
         var options: [AgentRunOptions] = []
         var prepared: [String] = []
+        var projects: [InstantProject?] = []
+        var picks = 0
     }
     private let made = Made()
     private var session: FakeAgentSession { made.sessions.last! }
@@ -31,11 +33,13 @@ struct AgentInstantTests {
                     change: "Making the Save button round instead of square", instructions: "edit the button")
     }
 
-    private func makeController(_ outcome: InstantOutcome? = nil) -> AgentController {
+    private func makeController(_ outcome: InstantOutcome? = nil, chosen: String? = nil,
+                                picker: (@MainActor () async -> String?)? = nil) -> AgentController {
         let ready = outcome ?? .ready(plan)
         let instant = InstantRuns(
-            prepare: { [made] request, _, _, onStage in
+            prepare: { [made] request, project, _, _, onStage in
                 made.prepared.append(request)
+                made.projects.append(project)
                 onStage(.viewingScreen)
                 onStage(.locatingProject)
                 guard case .ready(let plan) = ready else { return ready }
@@ -46,7 +50,9 @@ struct AgentInstantTests {
             },
             makeGuard: { [sandbox] plan in
                 InstantGuard(projects: [plan.project.path], home: sandbox.home, backupFolder: sandbox.backups)
-            })
+            },
+            remember: { _ in },
+            home: sandbox.home)
         return AgentController(
             surface: surface,
             indicator: FakeIndicator(),
@@ -64,6 +70,7 @@ struct AgentInstantTests {
             alwaysAllow: { false },
             memory: { "" },
             instant: instant,
+            chooseFolder: picker ?? { chosen },
             chime: {},
             finished: { _ in }
         )
@@ -168,6 +175,59 @@ struct AgentInstantTests {
         #expect(made.prepared.last?.contains("the one in ~/northwind") == true)
     }
 
+    @Test("Choose Folder after it asks which project runs the first request in that folder")
+    func chooseFolder() async throws {
+        defer { sandbox.cleanUp() }
+        let folder = try sandbox.homeProject("northwind")
+        let agent = makeController(.stopped(.needsProject(InstantStop.whichProject)), chosen: folder)
+        agent.run("make the save button round", on: nil, instant: true)
+        await until { surface.model.status == .stopped }
+        #expect(surface.model.canChooseProject)
+
+        surface.onChooseProject?()
+        await until { made.prepared.count == 2 }
+
+        #expect(made.prepared.last == "make the save button round")
+        #expect(made.projects.last??.path == InstantFolders.projectRoot(folder, home: sandbox.home))
+        #expect(surface.model.task == "make the save button round")
+    }
+
+    @Test("a second click while the folder picker is open doesn't open another")
+    func chooseOnce() async throws {
+        defer { sandbox.cleanUp() }
+        let folder = try sandbox.homeProject("northwind")
+        let agent = makeController(.stopped(.needsProject(InstantStop.whichProject)), picker: { [made] in
+            made.picks += 1
+            try? await Task.sleep(for: .milliseconds(50))
+            return folder
+        })
+        agent.run("make the save button round", on: nil, instant: true)
+        await until { surface.model.status == .stopped }
+
+        surface.onChooseProject?()
+        surface.onChooseProject?()
+        await until { made.prepared.count == 2 }
+        try? await Task.sleep(for: .milliseconds(150))
+
+        #expect(made.picks == 1)
+        #expect(made.prepared.count == 2)
+    }
+
+    @Test("Choose Folder closed without a folder leaves the question up")
+    func chooseNothing() async {
+        defer { sandbox.cleanUp() }
+        let agent = makeController(.stopped(.needsProject(InstantStop.whichProject)))
+        agent.run("make the save button round", on: nil, instant: true)
+        await until { surface.model.status == .stopped }
+
+        surface.onChooseProject?()
+        try? await Task.sleep(for: .milliseconds(50))
+
+        #expect(made.prepared.count == 1)
+        #expect(surface.model.canChooseProject)
+        #expect(surface.model.reply == InstantStop.whichProject)
+    }
+
     @Test("a normal task after an Instant run starts its own session, with the full agent")
     func normalAfterInstant() async {
         defer { sandbox.cleanUp() }
@@ -188,12 +248,12 @@ struct AgentInstantTests {
     @Test("a stage that lands after Stop doesn't touch the stopped panel")
     func lateStage() async {
         defer { sandbox.cleanUp() }
-        let instant = InstantRuns(prepare: { _, _, _, onStage in
+        let instant = InstantRuns(prepare: { _, _, _, _, onStage in
             onStage(.viewingScreen)
             try? await Task.sleep(for: .milliseconds(40))
             onStage(.locatingProject)
             return .stopped(.unavailable("late"))
-        }, makeGuard: { InstantGuard(projects: [$0.project.path]) })
+        }, makeGuard: { InstantGuard(projects: [$0.project.path]) }, remember: { _ in }, home: sandbox.home)
         let agent = AgentController(surface: surface, indicator: FakeIndicator(),
                                     makeSession: { _, _, _ in FakeAgentSession() }, displayID: { _ in 1 },
                                     memory: { "" }, instant: instant, chime: {}, finished: { _ in })

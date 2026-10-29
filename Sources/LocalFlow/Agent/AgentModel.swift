@@ -86,6 +86,8 @@ final class AgentModel: ObservableObject {
     @Published private(set) var isInstant = false
     /// The Instant edit just made can still be put back.
     @Published var canUndo = false
+    /// The Instant run stopped to ask which project, so the user can choose its folder.
+    @Published var canChooseProject = false
     /// Steps on the screen wait while the user types in the agent's window.
     @Published var isHeld = false
     /// Steps dropped off the front of a long task, still counted as earlier.
@@ -95,6 +97,7 @@ final class AgentModel: ObservableObject {
         self.task = task
         isInstant = instant
         canUndo = false
+        canChooseProject = false
         isHeld = false
         status = .starting
         steps = []

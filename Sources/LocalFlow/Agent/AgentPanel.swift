@@ -178,6 +178,7 @@ final class AgentPanel: AgentInputHost {
     var onClose: (() -> Void)?
     var onInputClosed: (() -> Void)?
     var onUndo: (() -> Void)?
+    var onChooseProject: (() -> Void)?
     var onInputSend: (() -> Void)?
     var onInputCancel: (() -> Void)?
     var onOpenChats: (() -> Void)?
@@ -283,6 +284,7 @@ final class AgentPanel: AgentInputHost {
             onOpenChats: { [weak self] in self?.onOpenChats?() },
             onOpenConnectors: { [weak self] in self?.onOpenConnectors?() },
             onUndo: { [weak self] in self?.onUndo?() },
+            onChooseProject: { [weak self] in self?.onChooseProject?() },
             onCollapse: { [weak self] in self?.setCollapsed(true) },
             onExpand: { [weak self] in self?.setCollapsed(false) },
             onDragMoved: { [weak self] translation, grabbed in self?.dragMoved(translation, grabbed: grabbed) },

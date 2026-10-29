@@ -49,10 +49,12 @@ enum InstantSweepPrompt {
     "make the button disabled until the form is valid" is not_ui: that's behavior.
 
     Then the project. Work out which of the user's projects is on the screen from clues: the domain in the \
-    browser's address bar, the logo, the app or window name, page titles and headings. Match them against \
-    LocalFlow's memory, which lists each known project's name, folder, repo, domains and logo or app-name \
-    cues; recent edits hint at what the user is working on. Give the project's name and its folder exactly as \
-    the memory writes it. If no project in the memory clearly matches, project is null: never guess a folder.
+    browser's address bar, the logo, the app or window name, page titles and headings, and any project the \
+    request names. Match them against LocalFlow's memory, which lists each known project's name, folder, repo, \
+    domains and logo or app-name cues, then against the project folders found on this Mac, each with its \
+    GitHub repo and README title; recent edits hint at what the user is working on. Give the project's name \
+    and its folder exactly as the memory or the folder list writes it. If no project clearly matches, or two \
+    could, project is null: never guess a folder.
 
     Then the change: one line, at most 80 characters, starting with a verb ending in -ing, saying what will \
     change on screen, such as "Making the Save button round instead of square".

@@ -51,7 +51,7 @@ struct InstantSweepTests {
         for needle in ["not_ui", "too_big", "Google Calendar", "upload to S3", "fix the login bug",
                        "disabled until the form is valid", "rename the button label", "design profile",
                        "address bar", "logo", "window", "page title", "memory", "\"project\"", "\"change\"",
-                       "null", "80 characters", "Making the Save button round instead of square"] {
+                       "null", "80 characters", "folders found on this Mac", "two could", "Making the Save button round instead of square"] {
             #expect(prompt.contains(needle), "\(needle)")
         }
     }

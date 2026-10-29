@@ -32,11 +32,11 @@ enum InstantStop: Equatable, Sendable {
     case unavailable(String)
 
     static let turnOff = "Turn off Instant (⌘I) to run it as a normal agent task."
-    static let whichProject = "Which project is this? Tell me its folder or name and I'll remember it."
+    static let whichProject = "Which project is this? Choose its folder, or tell me its name."
     static let noScreen = "LocalFlow couldn't see the screen. Check that it has Screen Recording permission, then try again."
 
     static func projectNotFound(_ name: String) -> String {
-        "I couldn't find the folder for \(InstantSweepPrompt.oneLine(name)). Tell me its folder and I'll remember it."
+        "I couldn't find the folder for \(InstantSweepPrompt.oneLine(name)). Choose its folder, or tell me where it is."
     }
 
     /// What the panel tells the user.
@@ -79,13 +79,16 @@ struct InstantPipeline {
         self.memoryPaths = memoryPaths
     }
 
-    /// `memory` is the text of LocalFlow's memory file; `recent` lines about recent runs.
-    func run(request: String, memory: String, recent: [String],
+    /// `memory` gives the text of LocalFlow's memory file, read once the screen is seen;
+    /// `recent` lines about recent runs. `chosen` is a project the user picked, which wins
+    /// over the one the sweep names.
+    func run(request: String, project chosen: InstantProject? = nil, memory: () async -> String, recent: [String],
              onStage: (InstantStage) -> Void) async -> InstantOutcome {
         onStage(.viewingScreen)
         guard let screenshot = await capture() else { return .stopped(.unavailable(InstantStop.noScreen)) }
         onStage(.locatingProject)
-        let input = InstantSweepInput(request: request, screenshotPNGBase64: screenshot, memory: memory, recent: recent)
+        let input = InstantSweepInput(request: request, screenshotPNGBase64: screenshot, memory: await memory(),
+                                      recent: recent)
         let sorted = await sweep.check(input)
         switch sorted.verdict {
         case .tooBig(let reason): return .stopped(.tooBig(reason))
@@ -93,7 +96,7 @@ struct InstantPipeline {
         case .unavailable(let reason): return .stopped(.unavailable(reason))
         case .small: break
         }
-        guard let named = sorted.project else { return .stopped(.needsProject(InstantStop.whichProject)) }
+        guard let named = chosen ?? sorted.project else { return .stopped(.needsProject(InstantStop.whichProject)) }
         guard let root = InstantFolders.projectRoot(named.path, home: home) else {
             return .stopped(.needsProject(InstantStop.projectNotFound(named.name)))
         }

@@ -74,9 +74,9 @@ enum InstantPrompt {
     private static func memory(_ paths: [String], name: String) -> String {
         guard !paths.isEmpty else { return "" }
         return "LocalFlow keeps a memory of the user's projects in " + paths.joined(separator: " and ")
-            + ". If \(name) isn't recorded there yet, add one short entry for it with Edit (its name, folder, and the "
-            + "screen clues that identify it, such as its domain or app name), in the file's own format. Change nothing "
-            + "else there."
+            + ". If \(name)'s line there lacks the screen clues that identify it, such as its domain or app name, add "
+            + "them to that line with Edit; if it has no line, add one (its name, folder and those clues), in the "
+            + "file's own format. Change nothing else there."
     }
 
     private static func profileSection(_ profile: InstantDesignProfile) -> String {

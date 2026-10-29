@@ -13,12 +13,19 @@ struct InstantRunsTests {
                     change: "Making the Save button round instead of square", instructions: "edit the button")
     }
 
-    private func runs(_ sandbox: InstantSandbox, outcome: InstantOutcome = .stopped(.unavailable("x"))) -> InstantRuns {
-        InstantRuns(prepare: { _, _, _, _ in outcome },
+    private final class Remembered {
+        var projects: [InstantProject] = []
+    }
+
+    private func runs(_ sandbox: InstantSandbox, outcome: InstantOutcome = .stopped(.unavailable("x")),
+                      remembered: Remembered = Remembered()) -> InstantRuns {
+        InstantRuns(prepare: { _, _, _, _, _ in outcome },
                     makeGuard: { plan in
                         InstantGuard(projects: [plan.project.path], home: sandbox.home,
                                      backupFolder: sandbox.backups)
-                    })
+                    },
+                    remember: { remembered.projects.append($0) },
+                    home: sandbox.home)
     }
 
     @Test("each stage shows as a step: screen, project (renamed to its name), design profile, the change")
@@ -86,6 +93,115 @@ struct InstantRunsTests {
         instant.finish()
 
         #expect(instant.request(for: "make the footer gray") == "make the footer gray")
+    }
+
+    @Test("after the project question, Choose Folder hands back the request in that folder, and remembers it")
+    func choose() throws {
+        let sandbox = try InstantSandbox()
+        defer { sandbox.cleanUp() }
+        let folder = try sandbox.homeProject("northwind")
+        let plain = sandbox.home + "/code/plain"
+        try FileManager.default.createDirectory(atPath: plain, withIntermediateDirectories: true)
+        let remembered = Remembered()
+        let instant = runs(sandbox, remembered: remembered)
+        let model = AgentModel()
+        model.start(task: "make the save button round", instant: true)
+
+        instant.stopped(.needsProject(InstantStop.whichProject), request: "make the save button round", on: model)
+        #expect(model.canChooseProject)
+        #expect(instant.chose(plain, on: model) == nil)
+        #expect(model.reply == InstantRuns.notAProject)
+        #expect(model.canChooseProject)
+        let chosen = try #require(instant.chose(folder, on: model))
+
+        #expect(chosen.request == "make the save button round")
+        #expect(chosen.project == InstantProject(name: "northwind",
+                                                 path: try #require(InstantFolders.projectRoot(folder, home: sandbox.home))))
+        #expect(remembered.projects == [chosen.project])
+        #expect(instant.request(for: "make the title bigger") == "make the title bigger")
+        #expect(instant.chose(folder, on: model) == nil)
+    }
+
+    @Test("Choose Folder after a typed answer hands back the first request, without the answer")
+    func chooseAfterAnswer() throws {
+        let sandbox = try InstantSandbox()
+        defer { sandbox.cleanUp() }
+        let folder = try sandbox.homeProject("northwind")
+        let instant = runs(sandbox)
+        let model = AgentModel()
+        instant.stopped(.needsProject(InstantStop.whichProject), request: "make the save button round", on: model)
+        let merged = instant.request(for: "its called Northwind")
+        instant.stopped(.needsProject(InstantStop.whichProject), request: merged, on: model)
+
+        let chosen = try #require(instant.chose(folder, on: model))
+
+        #expect(chosen.request == "make the save button round")
+    }
+
+    @Test("Choose Folder is only offered for the project question")
+    func chooseOnlyForProject() throws {
+        let sandbox = try InstantSandbox()
+        defer { sandbox.cleanUp() }
+        let instant = runs(sandbox)
+        let model = AgentModel()
+        instant.stopped(.needsProject(InstantStop.whichProject), request: "make it round", on: model)
+        #expect(model.canChooseProject)
+
+        instant.stopped(.tooBig("It rebuilds the whole calendar."), request: "redo the calendar", on: model)
+        #expect(!model.canChooseProject)
+        instant.stopped(.needsProject(InstantStop.whichProject), request: "make it round", on: model)
+        model.start(task: "make it round", instant: true)
+        #expect(!model.canChooseProject)
+    }
+
+    @Test("a ready run's project is remembered; a stopped run remembers nothing")
+    func remembers() async throws {
+        let sandbox = try InstantSandbox()
+        defer { sandbox.cleanUp() }
+        let root = try sandbox.project()
+        let remembered = Remembered()
+        let ready = runs(sandbox, outcome: .ready(plan(root)), remembered: remembered)
+        let stopped = runs(sandbox, outcome: .stopped(.needsProject(InstantStop.whichProject)), remembered: remembered)
+
+        _ = await ready.prepare("make the save button round", project: nil, displayID: 1) { _ in }
+        _ = await stopped.prepare("make the save button round", project: nil, displayID: 1) { _ in }
+
+        #expect(remembered.projects == [InstantProject(name: "Northwind", path: root)])
+    }
+
+    @Test("a project's memory line has its name, folder and repo, unless the memory has that folder already")
+    func memoryLine() throws {
+        let box = try InstantSandbox()
+        defer { box.cleanUp() }
+        let folder = try box.homeProject("northwind")
+        try box.write("[remote \"origin\"]\n\turl = git@github.com:Acme/northwind.git\n", to: folder + "/.git/config")
+        let root = try #require(InstantFolders.projectRoot(folder, home: box.home))
+        let project = InstantProject(name: "Northwind", path: root)
+
+        #expect(InstantRuns.memoryLine(for: project, memory: "- Sundial | folder: ~/code/northwind-site", home: box.home)
+                == "Northwind | folder: ~/code/northwind | repo: Acme/northwind")
+        #expect(InstantRuns.memoryLine(for: project, memory: "- Northwind | folder: ~/code/northwind | cues: logo",
+                                       home: box.home) == nil)
+        #expect(InstantRuns.memoryLine(for: project, memory: "- NW lives in " + root + "/.", home: box.home) == nil)
+        #expect(InstantRuns.memoryLine(for: project, memory: "- Northwind | folder: ~/Code/Northwind", home: box.home)
+                == nil)
+        #expect(InstantRuns.memoryLine(for: project, memory: "- Web | folder: ~/code/northwind/web", home: box.home)
+                == "Northwind | folder: ~/code/northwind | repo: Acme/northwind")
+        let odd = InstantProject(name: "North | wind", path: root)
+        #expect(InstantRuns.memoryLine(for: odd, memory: "", home: box.home)?.hasPrefix("North / wind | folder: ") == true)
+    }
+
+    @Test("the sweep reads the memory, then the Settings folders, then the folders found on the Mac")
+    func sweepMemory() throws {
+        let found = InstantCatalog.heading + "\n- ~/code/orbit"
+        let text = InstantRuns.projectMemory("## Projects\n- Sundial", listed: ["/Users/someone/code/sundial"],
+                                             found: found)
+        let memory = try #require(text.range(of: "- Sundial"))
+        let listed = try #require(text.range(of: "- folder: /Users/someone/code/sundial"))
+        let folders = try #require(text.range(of: "- ~/code/orbit"))
+        #expect(memory.lowerBound < listed.lowerBound)
+        #expect(listed.lowerBound < folders.lowerBound)
+        #expect(InstantRuns.projectMemory("m", listed: [], found: "") == "m")
     }
 
     @Test("a run gets the Instant model's tools and instructions, and no connectors")

@@ -37,7 +37,7 @@ struct InstantProjectsSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.orange)
             }
-            Text("Instant Edits (⌘I in agent mode) makes one small change to how your app or site looks, straight away: it views the screen, works out which project it's in from LocalFlow's memory and these folders (or asks you), reads the project's design profile, then edits. No tests, builds, commits or deploys. Anything bigger, or anything that changes what the app does, is turned away, and Undo puts the files back.")
+            Text("Instant Edits (⌘I in agent mode) makes one small change to how your app or site looks, straight away: it views the screen, works out which project it's in from LocalFlow's memory, these folders and the project folders it finds on your Mac (or asks you to choose), reads the project's design profile, then edits. To tell the found folders apart, it shows Claude each one's GitHub repo name and README title. No tests, builds, commits or deploys. Anything bigger, or anything that changes what the app does, is turned away, and Undo puts the files back.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

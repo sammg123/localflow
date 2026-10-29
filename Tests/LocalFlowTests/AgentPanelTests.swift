@@ -451,6 +451,17 @@ struct AgentPanelRenderTests {
         model.canUndo = true
         model.reply = "Rounded the Save button in the job header (corner radius 8 to full), matching the pill buttons in your design profile."
         try render(model, name: "instant-done")
+
+        let asking = AgentModel()
+        asking.start(task: "make the save button round", instant: true)
+        asking.addStep(id: "screen", title: "Viewing screen")
+        asking.finishStep(id: "screen", state: .done)
+        asking.addStep(id: "project", title: "Locating project")
+        asking.endRunningSteps(as: .denied)
+        asking.status = .stopped
+        asking.reply = InstantStop.whichProject
+        asking.canChooseProject = true
+        try render(asking, name: "instant-which-project")
     }
 
     @Test("the box in the agent's window renders green in agent mode, with Instant on, and blue for Ask")

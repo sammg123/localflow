@@ -26,6 +26,8 @@ protocol AgentSurface: AnyObject {
     var onInputClosed: (() -> Void)? { get set }
     /// Undo on an Instant edit.
     var onUndo: (() -> Void)? { get set }
+    /// Choose Folder, when an Instant run asked which project.
+    var onChooseProject: (() -> Void)? { get set }
     var isVisible: Bool { get }
     /// The user is typing in the agent's window, which has the keyboard.
     var isTakingInput: Bool { get }
@@ -64,6 +66,9 @@ final class AgentController {
     private let memory: @MainActor () -> String
     /// Instant Edits: its stages, its guard, its Undo.
     private let instantRuns: InstantRuns
+    /// The folder picker for Choose Folder: a path, or nil when cancelled.
+    private let chooseFolder: @MainActor () async -> String?
+    private var isChoosingFolder = false
     /// An Instant run getting ready (screen, project, design profile) before its session starts.
     private var preparing: Task<Void, Never>?
     /// The session is an Instant run's: no cards, its guard answers, stages for steps.
@@ -116,6 +121,7 @@ final class AgentController {
          alwaysAllow: @escaping @MainActor () -> Bool = { Settings.shared.agentAlwaysAllow },
          memory: @escaping @MainActor () -> String = { FlowMemory().promptSection(for: .agent) },
          instant: InstantRuns? = nil,
+         chooseFolder: @escaping @MainActor () async -> String? = { await InstantFolderPicker.choose() },
          chime: @escaping @MainActor () -> Void = { SoundPlayer.playStart() },
          finished: @escaping @MainActor (Bool) -> Void = { $0 ? SoundPlayer.playStop() : SoundPlayer.playError() }) {
         self.surface = surface ?? AgentPanel()
@@ -128,6 +134,7 @@ final class AgentController {
         self.alwaysAllow = alwaysAllow
         self.memory = memory
         instantRuns = instant ?? InstantRuns()
+        self.chooseFolder = chooseFolder
         self.chime = chime
         self.finished = finished
         self.surface.onAnswer = { [weak self] approval, answer in self?.answer(approval, answer) }
@@ -138,6 +145,7 @@ final class AgentController {
             guard let self else { return }
             self.instantRuns.undo(on: self.model)
         }
+        self.surface.onChooseProject = { [weak self] in self?.chooseProject() }
     }
 
     static func displayID(of screen: NSScreen?) -> UInt32 {
@@ -479,7 +487,7 @@ final class AgentController {
 
     /// Gets ready stage by stage on the panel, then starts a session that may only make
     /// the one small UI change, in the one project.
-    private func runInstant(_ task: String, on screen: NSScreen?) {
+    private func runInstant(_ task: String, on screen: NSScreen?, project: InstantProject? = nil) {
         // Before close(), which drops a project question nobody answered.
         let request = instantRuns.request(for: task)
         close()
@@ -493,7 +501,7 @@ final class AgentController {
         FlowLog.shared.write("instant: run started")
         preparing = Task { [weak self, displayID] in
             guard let self else { return }
-            let outcome = await self.instantRuns.prepare(request, displayID: displayID) { stage in
+            let outcome = await self.instantRuns.prepare(request, project: project, displayID: displayID) { stage in
                 // Stopped or closed while getting ready: a late stage leaves the panel alone.
                 guard !Task.isCancelled else { return }
                 InstantRuns.show(stage, on: self.model)
@@ -508,6 +516,20 @@ final class AgentController {
             case .ready(let plan):
                 self.startInstant(plan)
             }
+        }
+    }
+
+    /// Choose Folder: runs the request that asked which project again, in the folder chosen.
+    private func chooseProject() {
+        // A second click while the picker is open would open another on top of it.
+        guard !isChoosingFolder else { return }
+        isChoosingFolder = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.isChoosingFolder = false }
+            guard let folder = await self.chooseFolder(),
+                  let chosen = self.instantRuns.chose(folder, on: self.model) else { return }
+            self.runInstant(chosen.request, on: self.screen, project: chosen.project)
         }
     }
 

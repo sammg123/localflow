@@ -2,7 +2,7 @@ import SwiftUI
 
 /// The Ask window: blue dot and waveform while talking, an editable box while typing, and
 /// a send button. ⌘ turns it green for the agent (⌘I adds Instant Edits). Same size,
-/// colors and spot as the live dictation window.
+/// colors and spot as the live dictation window, until it's dragged by its background.
 struct AskComposerView: View {
     static let size = NSSize(width: 460, height: 210)
 
@@ -11,6 +11,11 @@ struct AskComposerView: View {
     var onOpenChats: () -> Void = {}
     var onOpenConnectors: () -> Void = {}
     var onClose: () -> Void = {}
+    /// The window is being dragged. It follows the real pointer; only the first move's
+    /// translation counts, for the points moved before the drag began.
+    /// How far the pointer has come, and where in the window it went down.
+    var onDragMoved: (CGSize, CGPoint) -> Void = { _, _ in }
+    var onDragEnded: () -> Void = {}
 
     private var tint: Color { ComposerTint.color(agentMode: model.agentMode) }
 
@@ -32,6 +37,15 @@ struct AskComposerView: View {
                 .strokeBorder(ComposerTint.edge(agentMode: model.agentMode),
                               lineWidth: ComposerTint.edgeWidth(agentMode: model.agentMode))
         )
+        .gesture(dragToMove)
+    }
+
+    /// Past a few points the window moves with the pointer; the buttons keep their clicks
+    /// and the text box its selecting.
+    private var dragToMove: some Gesture {
+        DragGesture(minimumDistance: 3)
+            .onChanged { value in onDragMoved(value.translation, value.startLocation) }
+            .onEnded { _ in onDragEnded() }
     }
 
     private var header: some View {

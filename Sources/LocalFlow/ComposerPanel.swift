@@ -9,7 +9,8 @@ private final class ComposerWindow: NSPanel {
 
 /// A floating window where words are written: the Ask window and the hands-free
 /// dictation window. Non-activating, so the app being worked in stays frontmost, but
-/// it takes the keyboard while open so typing and Return land here.
+/// it takes the keyboard while open so typing and Return land here. It opens at home,
+/// the bottom middle, or where its view was last dragged (the Ask window's is).
 @MainActor
 class ComposerPanel: ComposerSurface {
     let model = ComposerModel()
@@ -31,6 +32,14 @@ class ComposerPanel: ComposerSurface {
     private var panel: ComposerWindow
     private let size: NSSize
     private let isOnScreen: @MainActor (NSWindow) -> Bool
+    /// Where the pointer is, in screen points (a test stands in for it).
+    private let pointerLocation: @MainActor () -> CGPoint
+    private var spot = ComposerSpot.home
+    private var screen: NSScreen?
+    /// The drag under way and where in the window it was grabbed. A grab anywhere else is
+    /// a new drag, and so is any after a show or hide: a window put away mid-drag never
+    /// hears the release.
+    private var drag: (grabbed: CGPoint, drag: AgentDrag)?
     private lazy var keys = ComposerKeys(model: model) { [weak self] in self?.panel }
     /// Bumped per show and hide, so only the latest show's landing check runs.
     private var landingCheck = 0
@@ -42,9 +51,11 @@ class ComposerPanel: ComposerSurface {
     var windowNumber: Int { panel.windowNumber }
     var isOnScreenNow: Bool { isOnScreen(panel) }
 
-    init(size: NSSize, isOnScreen: @escaping @MainActor (NSWindow) -> Bool = ComposerPanel.windowIsOnScreen) {
+    init(size: NSSize, isOnScreen: @escaping @MainActor (NSWindow) -> Bool = ComposerPanel.windowIsOnScreen,
+         pointerLocation: @escaping @MainActor () -> CGPoint = { NSEvent.mouseLocation }) {
         self.size = size
         self.isOnScreen = isOnScreen
+        self.pointerLocation = pointerLocation
         panel = Self.makeWindow(size: size)
     }
 
@@ -78,6 +89,7 @@ class ComposerPanel: ComposerSurface {
     }
 
     func show(on screen: NSScreen?) {
+        drag = nil
         position(on: screen ?? NSScreen.main)
         if !panel.isVisible {
             panel.alphaValue = 0
@@ -139,6 +151,7 @@ class ComposerPanel: ComposerSurface {
     func hide() {
         keys.remove()
         landingCheck += 1
+        drag = nil
         guard panel.isVisible else { return }
         panel.orderOut(nil)
     }
@@ -150,9 +163,73 @@ class ComposerPanel: ComposerSurface {
 
     private func position(on screen: NSScreen?) {
         guard let screen else { return }
-        let visible = screen.visibleFrame
-        panel.setFrame(NSRect(x: visible.midX - size.width / 2, y: visible.minY + 28,
-                              width: size.width, height: size.height),
-                       display: false)
+        self.screen = screen
+        panel.setFrame(spot.frame(size: size, in: screen.visibleFrame), display: false)
+    }
+
+    // MARK: - Dragged by its background
+
+    /// Follows the pointer, onto any screen, kept wholly on it. `translation` is how far the
+    /// pointer has come (only the first move's counts) and `grabbed` where in the window it went down.
+    func dragMoved(_ translation: CGSize, grabbed: CGPoint) {
+        let pointer = pointerLocation()
+        let drag = self.drag.flatMap { $0.grabbed == grabbed ? $0.drag : nil }
+            ?? AgentDrag(pointer: pointer, translation: translation, frame: panel.frame)
+        self.drag = (grabbed, drag)
+        if let under = NSScreen.screens.first(where: { $0.frame.contains(pointer) }) { screen = under }
+        guard let screen else { return }
+        panel.setFrame(AgentPlacement.clamped(drag.frame(at: pointer), in: screen.visibleFrame), display: true)
+    }
+
+    /// Let go: it snaps to the top right or home when it's close to one, else stays put,
+    /// and opens there from now on.
+    func dragEnded() {
+        guard drag != nil, let screen else { return }
+        drag = nil
+        spot = ComposerSpot.dropped(panel.frame, in: screen.visibleFrame)
+        let target = spot.frame(size: size, in: screen.visibleFrame)
+        guard target != panel.frame else { return }
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            return panel.setFrame(target, display: true)
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.2
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().setFrame(target, display: true)
+        }
+    }
+}
+
+/// Where a composer window opens: home until it's dragged, then the top right or home
+/// when let go near one, else where it was let go. That last is kept as a share of the
+/// screen's visible area, so on another display it opens in the same place there.
+enum ComposerSpot: Equatable {
+    case home
+    case corner(AgentPlacement.Corner)
+    /// The window's top middle, as a share of the visible area's width and height from its bottom left.
+    case share(CGPoint)
+
+    static func dropped(_ frame: NSRect, in visible: NSRect) -> ComposerSpot {
+        switch AgentPlacement.spot(droppedAt: frame, in: visible) {
+        case .home:
+            return .home
+        case .corner(let corner):
+            return .corner(corner)
+        case .free(let top):
+            return .share(CGPoint(x: (top.x - visible.minX) / max(visible.width, 1),
+                                  y: (top.y - visible.minY) / max(visible.height, 1)))
+        }
+    }
+
+    func frame(size: NSSize, in visible: NSRect) -> NSRect {
+        switch self {
+        case .home:
+            return AgentPlacement.home(size: size, in: visible)
+        case .corner(let corner):
+            return AgentPlacement.frame(size: size, in: visible, corner: corner)
+        case .share(let share):
+            let top = CGPoint(x: visible.minX + share.x * visible.width, y: visible.minY + share.y * visible.height)
+            return AgentPlacement.frame(size: size, in: visible, spot: .free(top))
+        }
     }
 }

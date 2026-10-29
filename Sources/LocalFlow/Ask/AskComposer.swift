@@ -105,18 +105,21 @@ extension ComposerSurface {
 }
 
 /// The Ask window, where the pill appears: talk or type, then Return or the send button
-/// sends: a question about the screen, or in agent mode (⌘) a task for the agent.
+/// sends: a question about the screen, or in agent mode (⌘) a task for the agent. Dragged
+/// by its background, it opens where it was left.
 @MainActor
 final class AskComposerPanel: ComposerPanel {
     var onOpenChats: (() -> Void)?
     var onOpenConnectors: (() -> Void)?
 
-    init() {
-        super.init(size: AskComposerView.size)
+    init(pointerLocation: @escaping @MainActor () -> CGPoint = { NSEvent.mouseLocation }) {
+        super.init(size: AskComposerView.size, pointerLocation: pointerLocation)
         takesModeKeys = true
         setContent(AskComposerView(model: model, onSend: { [weak self] in self?.onSend?() },
                                    onOpenChats: { [weak self] in self?.onOpenChats?() },
                                    onOpenConnectors: { [weak self] in self?.onOpenConnectors?() },
-                                   onClose: { [weak self] in self?.onCancel?() }))
+                                   onClose: { [weak self] in self?.onCancel?() },
+                                   onDragMoved: { [weak self] in self?.dragMoved($0, grabbed: $1) },
+                                   onDragEnded: { [weak self] in self?.dragEnded() }))
     }
 }

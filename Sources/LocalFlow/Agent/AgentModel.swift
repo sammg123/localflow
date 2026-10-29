@@ -85,6 +85,13 @@ final class AgentModel: ObservableObject {
         startedAt = Date()
     }
 
+    /// More for the same session: the new words become the task, the steps carry on.
+    func followUp(task: String) {
+        self.task = task
+        status = .working
+        reply = ""
+    }
+
     func addStep(id: String, title: String) {
         guard !steps.contains(where: { $0.id == id }) else { return }
         let added = steps + [AgentStep(id: id, title: title, state: .running)]
@@ -93,8 +100,9 @@ final class AgentModel: ObservableObject {
         steps = Array(added.dropFirst(overflow))
     }
 
+    /// Only a running step finishes: one turned down stays turned down when its error arrives.
     func finishStep(id: String, state: AgentStep.State) {
-        steps = steps.map { $0.id == id ? $0.with(state) : $0 }
+        steps = steps.map { $0.id == id && $0.state == .running ? $0.with(state) : $0 }
     }
 
     /// Steps still running when the task ends didn't finish.

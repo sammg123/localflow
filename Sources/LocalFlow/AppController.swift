@@ -50,6 +50,8 @@ final class AppController {
     private var ask: AskController!
     private var askSession: AskSession!
     private var askChats: AskHistoryWindowController!
+    /// Do it in the Ask window: the agent that uses the Mac.
+    private var agent: AgentController!
     var menuBar: MenuBarController!
     var hud: HUDPanel!
     /// The double-tap window: talk, pause to edit, Return to paste.
@@ -116,6 +118,8 @@ final class AppController {
             canOpen: { [weak self] in self?.askCanOpen() ?? false },
             swallowPress: { [weak self] in self?.askHotkeyMonitor?.swallowCurrentPress() }
         )
+        agent = AgentController()
+        askSession.onTask = { [weak self] task, screen in self?.agent.run(task, on: screen) }
         // Esc closes the Ask window or the answer, from any app, while one is up.
         askSession.onPhaseChange = { [weak self] _ in self?.updateAskEscape() }
         ask.onChange = { [weak self] in self?.updateAskEscape() }
@@ -202,6 +206,7 @@ final class AppController {
     func shutdown() {
         handsFree?.cancel()
         askSession?.cancel()
+        agent?.close()
         ask?.dismiss()
         ask?.chats.flush()
         askHotkeyMonitor?.stopMonitoring()
@@ -457,6 +462,7 @@ final class AppController {
         askHotkeyMonitor = nil
         ask.updateCloseHint(askCloseHint)
         askSession.keyName = askKeyName
+        agent.setFollowUpHint("\(askKeyName), then ⌘Return to give it more")
         guard let key = AskKeyChoice.effectiveHotkey(ask: settings.askKey, dictation: settings.hotkey) else { return }
         let monitor = HotkeyMonitor(choice: key)
         let now = { ProcessInfo.processInfo.systemUptime }

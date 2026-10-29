@@ -9,6 +9,8 @@ enum ClickTarget {
     static let maxLength = 60
     /// How far up from the element under the point to look for a name.
     static let maxDepth = 3
+    /// The longest an app gets to answer, so a frozen one can't hold up LocalFlow.
+    static let timeout: Float = 0.5
 
     struct ElementInfo: Equatable {
         var role: String?
@@ -37,6 +39,8 @@ enum ClickTarget {
     /// The name of what's at this global point (top-left origin), if anything has one.
     static func label(at point: CGPoint) -> String? {
         let system = AXUIElementCreateSystemWide()
+        // Set on the system-wide element, this is the limit for every element asked.
+        AXUIElementSetMessagingTimeout(system, timeout)
         var element: AXUIElement?
         guard AXUIElementCopyElementAtPosition(system, Float(point.x), Float(point.y), &element) == .success,
               let element else { return nil }

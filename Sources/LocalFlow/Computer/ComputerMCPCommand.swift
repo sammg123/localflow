@@ -30,6 +30,10 @@ enum ComputerMCPCommand {
     static func run(arguments: [String]) -> Never {
         // A closed stdout should end the server quietly, not kill it with SIGPIPE.
         signal(SIGPIPE, SIG_IGN)
+        guard ComputerLaunchGuard.isStartedByHost() else {
+            FileHandle.standardError.write(Data("localflow \(flag): only LocalFlow's agent can start this.\n".utf8))
+            exit(77) // EX_NOPERM
+        }
         let displayID: CGDirectDisplayID
         do {
             displayID = try requestedDisplay(in: arguments) ?? ScreenMapping.displayUnderMouse()

@@ -41,6 +41,34 @@ struct AgentModelTests {
         #expect(model.steps.map(\.title) == ["Run tests", "Click Send", "Delete files"])
     }
 
+    @Test("a step turned down stays turned down when its result comes back")
+    func deniedStaysDenied() {
+        let model = AgentModel()
+        model.start(task: "t")
+        model.addStep(id: "a", title: "Push")
+        model.finishStep(id: "a", state: .denied)
+
+        model.finishStep(id: "a", state: .failed)
+
+        #expect(model.steps.first?.state == .denied)
+    }
+
+    @Test("more for the same session replaces the task and keeps the steps")
+    func followUp() {
+        let model = AgentModel()
+        model.start(task: "first")
+        model.addStep(id: "a", title: "Look")
+        model.reply = "done the first"
+        model.status = .done
+
+        model.followUp(task: "second")
+
+        #expect(model.task == "second")
+        #expect(model.status == .working)
+        #expect(model.reply.isEmpty)
+        #expect(model.steps.count == 1)
+    }
+
     @Test("the same step reported twice shows once")
     func duplicateStep() {
         let model = AgentModel()

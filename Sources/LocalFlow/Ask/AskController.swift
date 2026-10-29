@@ -21,9 +21,11 @@ protocol AnswerSurface: AnyObject {
     func updateCloseHint(_ hint: String)
 }
 
-/// The "I'm looking at your screen" signal. The blue outline in the app.
+/// The "I'm looking at your screen" signal. The outline in the app: blue for Ask, green
+/// for the agent.
 @MainActor
 protocol ListeningIndicator: AnyObject {
+    var tint: GlowTint { get set }
     func show(on screen: NSScreen?)
     func hide()
 }
@@ -153,6 +155,11 @@ final class AskController {
     func cancelPreparing() {
         isComposing = false
         updateOutline()
+    }
+
+    /// The box switched between Ask and agent mode: the outline goes blue or green with it.
+    func setAgentMode(_ agentMode: Bool) {
+        glow.tint = agentMode ? .agent : .ask
     }
 
     /// The blue outline means "Ask is looking at this screen": while the question is

@@ -119,7 +119,7 @@ final class AgentController {
          chime: @escaping @MainActor () -> Void = { SoundPlayer.playStart() },
          finished: @escaping @MainActor (Bool) -> Void = { $0 ? SoundPlayer.playStop() : SoundPlayer.playError() }) {
         self.surface = surface ?? AgentPanel()
-        glow = indicator ?? ScreenGlow(color: AgentStyle.green)
+        glow = indicator ?? ScreenGlow(tint: .agent)
         self.makeSession = makeSession
         displayIDFor = displayID
         mappingFor = mapping

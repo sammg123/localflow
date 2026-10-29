@@ -1,13 +1,32 @@
 import AppKit
 import SwiftUI
 
+/// The outline's color: Ask's blue, or the agent's green.
+enum GlowTint: Equatable {
+    case ask
+    case agent
+
+    var color: Color { self == .agent ? AgentStyle.green : AnswerView.askBlue }
+}
+
 /// The outline around the screen: blue while Ask is listening and looking, green while
-/// the agent is using the Mac. Click-through and above everything, on the one display.
+/// the box is in agent mode or the agent is using the Mac. Click-through and above
+/// everything, on the one display.
 @MainActor
 final class ScreenGlow {
     private let panel: NSPanel
+    private let hosting: NSHostingView<GlowView>
+    private let pulses = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
 
-    init(color: Color = AnswerView.askBlue) {
+    var tint: GlowTint {
+        didSet {
+            guard tint != oldValue else { return }
+            hosting.rootView = GlowView(color: tint.color, pulses: pulses)
+        }
+    }
+
+    init(tint: GlowTint = .ask) {
+        self.tint = tint
         panel = NSPanel(
             contentRect: .zero,
             styleMask: [.borderless, .nonactivatingPanel],
@@ -21,8 +40,7 @@ final class ScreenGlow {
         panel.ignoresMouseEvents = true
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
-        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        let hosting = NSHostingView(rootView: GlowView(color: color, pulses: !reduceMotion))
+        hosting = NSHostingView(rootView: GlowView(color: tint.color, pulses: pulses))
         hosting.sizingOptions = [] // always exactly the screen's frame
         panel.contentView = hosting
     }

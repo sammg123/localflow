@@ -301,6 +301,41 @@ struct AskRenderTests {
         #expect(AnswerPanel.frontWindow(of: 7, among: windows) == expected)
     }
 
+    @Test("the screen outline is green for the agent and blue for Ask", arguments: [
+        (GlowTint.agent, true), (.ask, false),
+    ])
+    func glowTint(tint: GlowTint, green: Bool) throws {
+        let size = CGSize(width: 400, height: 300)
+        let renderer = ImageRenderer(content: GlowView(color: tint.color, pulses: false)
+            .frame(width: size.width, height: size.height))
+
+        let edge = try #require(edgePixel(renderer.cgImage, x: 1))
+
+        #expect((edge.greenComponent > edge.blueComponent) == green)
+    }
+
+    @Test("the box's edge is green in agent mode and blue in Ask mode", arguments: [true, false])
+    func composerEdge(agentMode: Bool) throws {
+        let model = ComposerModel()
+        model.mode = .typing
+        model.agentMode = agentMode
+        let renderer = ImageRenderer(content: AskComposerView(model: model))
+        renderer.scale = 2
+
+        let edge = try #require(edgePixel(renderer.cgImage, x: 1))
+
+        #expect((edge.greenComponent > edge.blueComponent) == agentMode)
+        if agentMode { #expect(edge.greenComponent > 0.5) }
+        try saveSnapshot(try #require(renderer.nsImage), name: "composer-edge-\(agentMode ? "agent" : "ask")")
+    }
+
+    /// The color halfway down an image's left edge.
+    private func edgePixel(_ image: CGImage?, x: Int) -> NSColor? {
+        guard let image else { return nil }
+        let bitmap = NSBitmapImageRep(cgImage: image)
+        return bitmap.colorAt(x: x, y: bitmap.pixelsHigh / 2)?.usingColorSpace(.sRGB)
+    }
+
     @Test("screen glow renders at the screen's size")
     func rendersGlow() throws {
         let size = CGSize(width: 1512, height: 982)

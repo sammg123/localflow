@@ -5,6 +5,16 @@ enum ComposerTint {
     static func color(agentMode: Bool) -> Color {
         agentMode ? AgentStyle.green : AnswerView.askBlue
     }
+
+    /// The box's outline: a soft blue for Ask, a solid green for the agent, so the mode
+    /// shows at a glance.
+    static func edge(agentMode: Bool) -> Color {
+        color(agentMode: agentMode).opacity(agentMode ? 0.95 : 0.35)
+    }
+
+    static func edgeWidth(agentMode: Bool) -> CGFloat {
+        agentMode ? 2 : 1
+    }
 }
 
 /// Where the words go, in both windows that have a box: an editable box while typing;

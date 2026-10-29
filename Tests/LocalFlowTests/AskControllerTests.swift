@@ -87,6 +87,7 @@ final class FakeSurface: AnswerSurface {
 @MainActor
 final class FakeIndicator: ListeningIndicator {
     private(set) var isShowing = false
+    var tint: GlowTint = .ask
     func show(on screen: NSScreen?) { isShowing = true }
     func hide() { isShowing = false }
 }

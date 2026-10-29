@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 
 /// The one microphone, lent to Ask by AppController, which owns it and the dictation state.
@@ -57,6 +58,8 @@ final class AskSession {
     /// Bumped per key-down, so a late hold timer can tell it belongs to an older press.
     private var pressID = 0
     private var liveTranscriber: LiveTranscriber?
+    /// Keeps the screen outline the box's color as ⌘ switches modes.
+    private var modeWatch: AnyCancellable?
 
     /// Shorter clips than this are thrown away rather than transcribed into a guess.
     private static let minSpeechSamples = Int(0.3 * AudioRecorder.targetSampleRate)
@@ -85,6 +88,9 @@ final class AskSession {
         self.liveInterval = liveInterval
         composer.onSend = { [weak self] in self?.send() }
         composer.onCancel = { [weak self] in self?.cancel() }
+        modeWatch = composer.model.$agentMode.removeDuplicates().sink { [weak answers] agentMode in
+            answers?.setAgentMode(agentMode)
+        }
     }
 
     // MARK: - Events

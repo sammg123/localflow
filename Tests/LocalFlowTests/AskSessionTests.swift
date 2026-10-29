@@ -458,6 +458,31 @@ struct AskSessionTests {
         #expect(client.bodies.count == 1)
     }
 
+    @Test("⌘ turns the screen outline green with the box, and back to blue")
+    func outlineFollowsMode() {
+        let (session, _) = makeSession()
+        tap(session, at: 0)
+        #expect(indicator.isShowing)
+        #expect(indicator.tint == .ask)
+
+        composer.model.toggleAgentMode()
+        #expect(indicator.isShowing)
+        #expect(indicator.tint == .agent)
+
+        composer.model.toggleAgentMode()
+        #expect(indicator.tint == .ask)
+    }
+
+    @Test("opened for the agent, the screen outline starts green")
+    func outlineOpensGreen() {
+        let (session, _) = makeSession()
+
+        session.openForTyping(agentMode: true)
+
+        #expect(indicator.isShowing)
+        #expect(indicator.tint == .agent)
+    }
+
     @Test("opened for the agent (⌘ on its window), the box starts in agent mode")
     func openForAgent() {
         let (session, _) = makeSession()

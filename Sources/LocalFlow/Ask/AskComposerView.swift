@@ -29,7 +29,8 @@ struct AskComposerView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .strokeBorder(tint.opacity(model.agentMode ? 0.55 : 0.35), lineWidth: model.agentMode ? 1.5 : 1)
+                .strokeBorder(ComposerTint.edge(agentMode: model.agentMode),
+                              lineWidth: ComposerTint.edgeWidth(agentMode: model.agentMode))
         )
     }
 

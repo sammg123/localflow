@@ -77,17 +77,17 @@ struct AgentPanelView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .strokeBorder(edgeColor.opacity(showsInput ? 0.55 : 0.4), lineWidth: showsInput ? 1.5 : 1)
+                .strokeBorder(edgeColor, lineWidth: showsInput ? ComposerTint.edgeWidth(agentMode: input.agentMode) : 1)
         )
         .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: model.steps)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: model.approvals)
     }
 
     private var edgeColor: Color {
-        if model.status == .needsApproval { return AgentStyle.amber }
-        if showsInput { return ComposerTint.color(agentMode: input.agentMode) }
-        if case .failed = model.status { return AgentStyle.red }
-        return AgentStyle.green
+        if model.status == .needsApproval { return AgentStyle.amber.opacity(showsInput ? 0.55 : 0.4) }
+        if showsInput { return ComposerTint.edge(agentMode: input.agentMode) }
+        if case .failed = model.status { return AgentStyle.red.opacity(0.4) }
+        return AgentStyle.green.opacity(0.4)
     }
 
     /// Ask's box, under the conversation.

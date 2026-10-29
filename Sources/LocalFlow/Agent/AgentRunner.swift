@@ -145,8 +145,25 @@ final class AgentRunner: @unchecked Sendable {
         if wasIdle { return finish(nil) }
         guard let process else { return } // not started yet; `launched` closes it
         log("agent: closing")
+        ProcessTree.endDescendants(of: process.processIdentifier)
         closeInput()
         stopLater(process)
+    }
+
+    /// Ends the session now, with no grace period: LocalFlow is quitting, and a session
+    /// left to finish on its own would carry on with no one to stop it.
+    func terminate() {
+        let (process, folder) = locked { state -> (Process?, URL?) in
+            guard state.phase == .running || state.phase == .closing else { return (nil, nil) }
+            state.phase = .closing
+            state.pending = []
+            return (state.process, state.folder)
+        }
+        log("agent: terminating")
+        if let process { ProcessTree.endDescendantsNow(of: process.processIdentifier) }
+        closeInput()
+        if let process, process.isRunning { process.terminate() }
+        if let folder { try? FileManager.default.removeItem(at: folder) }
     }
 
     // MARK: Running

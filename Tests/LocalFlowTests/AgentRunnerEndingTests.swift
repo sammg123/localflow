@@ -27,6 +27,24 @@ final class AgentRunnerEndingTests {
         #expect(events.all.last == .ended(nil))
     }
 
+    @Test("quitting stops Claude Code at once, without the grace period, and removes its folder")
+    func terminateNow() async throws {
+        let fake = try fakes.make(#"""
+        echo "$TMPDIR" > "$(dirname "$0")/folder"
+        echo '{"type":"system","subtype":"init","session_id":"s-1"}'
+        while true; do sleep 1; done
+        """#)
+        let agent = fakes.runner(fake)
+        let events = AgentEventLog(agent)
+        agent.start(task: "x", imagePNGBase64: nil)
+        #expect(await events.wait { if case .sessionStarted = $0 { true } else { false } } != nil)
+
+        let started = ContinuousClock.now
+        agent.terminate()
+        #expect(await events.ended() == .some(nil))
+        #expect(started.duration(to: .now) < .milliseconds(1_500))
+    }
+
     @Test("a session that won't close when asked is stopped")
     func stubbornClose() async throws {
         let fake = try fakes.make(#"""

@@ -9,6 +9,8 @@ protocol AgentSession: AnyObject, Sendable {
     func answer(requestID: String, allow: Bool, input: AgentJSON, message: String?)
     func interrupt()
     func close()
+    /// Ends it now, with no grace period (LocalFlow is quitting).
+    func terminate()
 }
 
 extension AgentRunner: AgentSession {}
@@ -24,7 +26,7 @@ protocol AgentSurface: AnyObject {
     func show(on screen: NSScreen?)
     func hide()
     func setFollowUpHint(_ hint: String)
-    @discardableResult func moveAside(ifCovering point: CGPoint) -> Bool
+    @discardableResult func moveAside(avoiding points: [CGPoint]) -> Bool
 }
 
 extension AgentPanel: AgentSurface {}
@@ -36,24 +38,27 @@ extension AgentPanel: AgentSurface {}
 @MainActor
 final class AgentController {
     typealias MakeSession = @MainActor (_ model: String, _ displayID: UInt32) -> AgentSession
+    typealias LookUp = @MainActor (CGPoint) async -> ClickTarget.Found
 
     /// The reply streamed while working keeps only its newest text.
     static let maxReply = 20_000
     private static let screenTools = "mcp__\(AgentInvocation.serverName)__"
+    private static let clickTool = screenTools + "click"
 
     private let surface: AgentSurface
     private let glow: ListeningIndicator
     private let makeSession: MakeSession
     private let displayIDFor: @MainActor (NSScreen?) -> UInt32
     private let mappingFor: @MainActor (UInt32) -> ScreenMapping?
-    private let targetTitle: @MainActor (CGPoint) -> String?
+    private let lookUp: LookUp
+    private let frontApp: @MainActor () -> String?
     private let chime: @MainActor () -> Void
     private let finished: @MainActor (_ succeeded: Bool) -> Void
 
     private var session: AgentSession?
     private var listener: Task<Void, Never>?
     private var screen: NSScreen?
-    private var mapping: ScreenMapping?
+    private var displayID: UInt32 = 0
     /// Kinds of step allowed with "Allow for this task", until the panel closes.
     private var grants: Set<String> = []
     /// Requests waiting on the user, by Claude Code's request id.
@@ -61,13 +66,17 @@ final class AgentController {
     /// Turns sent and not finished: more can be sent while one runs.
     private var openTurns = 0
     private var stopping = false
+    /// The session was told to end; anything more starts a new one.
+    private var ending = false
 
     private struct Pending {
         let toolName: String
         let input: AgentJSON
         let stepID: String
         let points: [CGPoint]
-        let target: String?
+        let found: ClickTarget.Found
+        /// The app in front when the step was asked for: Return sends in a chat app.
+        let frontApp: String?
     }
 
     private var model: AgentModel { surface.model }
@@ -80,7 +89,8 @@ final class AgentController {
          makeSession: @escaping MakeSession = { AgentRunner(model: $0, displayID: $1) },
          displayID: @escaping @MainActor (NSScreen?) -> UInt32 = AgentController.displayID(of:),
          mapping: @escaping @MainActor (UInt32) -> ScreenMapping? = { ScreenMapping(displayID: $0) },
-         targetTitle: @escaping @MainActor (CGPoint) -> String? = { ClickTarget.label(at: $0) },
+         lookUp: @escaping LookUp = { point in await Task.detached { ClickTarget.find(at: point) }.value },
+         frontApp: @escaping @MainActor () -> String? = { NSWorkspace.shared.frontmostApplication?.bundleIdentifier },
          chime: @escaping @MainActor () -> Void = { SoundPlayer.playStart() },
          finished: @escaping @MainActor (Bool) -> Void = { $0 ? SoundPlayer.playStop() : SoundPlayer.playError() }) {
         self.surface = surface ?? AgentPanel()
@@ -88,7 +98,8 @@ final class AgentController {
         self.makeSession = makeSession
         displayIDFor = displayID
         mappingFor = mapping
-        self.targetTitle = targetTitle
+        self.lookUp = lookUp
+        self.frontApp = frontApp
         self.chime = chime
         self.finished = finished
         self.surface.onAnswer = { [weak self] approval, answer in self?.answer(approval, answer) }
@@ -112,7 +123,7 @@ final class AgentController {
     func run(_ task: String, on screen: NSScreen?) {
         let task = task.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !task.isEmpty else { return }
-        if let session, surface.isVisible {
+        if let session, surface.isVisible, !ending {
             model.followUp(task: task)
             openTurns += 1
             stopping = false
@@ -123,8 +134,7 @@ final class AgentController {
         }
         close()
         self.screen = screen ?? NSScreen.main
-        let displayID = displayIDFor(self.screen)
-        mapping = mappingFor(displayID)
+        displayID = displayIDFor(self.screen)
         let session = makeSession(Settings.shared.effectiveAgentModel, displayID)
         self.session = session
         openTurns = 1
@@ -137,22 +147,32 @@ final class AgentController {
     }
 
     /// The Stop button: what's waiting is turned down and the current turn stops. The
-    /// session stays open for more.
+    /// session stays open for more, unless there's nothing to interrupt yet or more is
+    /// queued behind this turn: then the session ends.
     func stop() {
-        guard let session, model.status.isWorking else { return }
+        guard let session, !ending, model.status.isWorking else { return }
         FlowLog.shared.write("agent: stopped by the user")
-        guard model.status != .starting else {
-            // Nothing is running yet to interrupt; end it before it begins.
-            return session.close()
-        }
         stopping = true
         denyWaiting()
+        guard model.status != .starting, openTurns <= 1 else {
+            ending = true
+            return session.close()
+        }
         session.interrupt()
+    }
+
+    /// LocalFlow is quitting: the session ends now rather than after a grace period.
+    func shutdown() {
+        let current = session
+        close()
+        current?.terminate()
     }
 
     /// The ✕: ends the session (and anything it left running) and puts everything away.
     func close() {
-        let ending = session
+        let current = session
+        // Already told to end by Stop: once is enough.
+        let alreadyEnding = ending
         session = nil
         listener?.cancel()
         listener = nil
@@ -160,7 +180,8 @@ final class AgentController {
         grants = []
         openTurns = 0
         stopping = false
-        ending?.close()
+        ending = false
+        if !alreadyEnding { current?.close() }
         surface.hide()
         glow.hide()
     }
@@ -174,6 +195,9 @@ final class AgentController {
             session?.answer(requestID: approval.id, allow: false, input: pending.input, message: nil)
             model.finishStep(id: pending.stepID, state: .denied)
         case .allowOnce:
+            FlowLog.shared.write("agent: user allowed \(pending.toolName)")
+            allow(approval.id, pending)
+        case .allowForTask where !approval.canAllowForTask:
             FlowLog.shared.write("agent: user allowed \(pending.toolName)")
             allow(approval.id, pending)
         case .allowForTask:
@@ -204,8 +228,7 @@ final class AgentController {
             model.reply = String((model.reply + text).suffix(Self.maxReply))
         case .toolStarted(let id, let name, let input):
             markWorking()
-            let target = name == Self.screenTools + "click" ? pointerPoints(name, input).first.flatMap(targetTitle) : nil
-            model.addStep(id: id, title: AgentStepTitle.title(toolName: name, input: input, target: target))
+            model.addStep(id: id, title: AgentStepTitle.title(toolName: name, input: input, target: nil))
         case .toolFinished(let id, let isError, _):
             model.finishStep(id: id, state: isError ? .failed : .done)
         case .permissionRequest(let requestID, let toolName, let input, _, let toolUseID):
@@ -223,40 +246,70 @@ final class AgentController {
         if model.status == .starting { model.status = .working }
     }
 
-    /// Safe steps go ahead; risky ones wait on a card. Once stopping, everything is no.
+    /// Safe steps go ahead; risky ones wait on a card. Screenshots leave the panel out,
+    /// so the agent can't see it: it moves off every point a step acts on first, and only
+    /// then is what's under a click looked up (else it would be the panel's own button).
     private func review(requestID: String, toolName: String, input: AgentJSON, stepID: String) {
         let points = pointerPoints(toolName, input)
-        let target = toolName == Self.screenTools + "click" ? points.first.flatMap(targetTitle) : nil
-        model.addStep(id: stepID, title: AgentStepTitle.title(toolName: toolName, input: input, target: target))
-        let pending = Pending(toolName: toolName, input: input, stepID: stepID, points: points, target: target)
-        guard !stopping else {
-            session?.answer(requestID: requestID, allow: false, input: input, message: nil)
-            return model.finishStep(id: stepID, state: .denied)
+        surface.moveAside(avoiding: points)
+        model.addStep(id: stepID, title: AgentStepTitle.title(toolName: toolName, input: input, target: nil))
+        let front = frontApp()
+        guard toolName == Self.clickTool, let point = points.first else {
+            return decide(requestID, Pending(toolName: toolName, input: input, stepID: stepID, points: points,
+                                             found: .unnamed, frontApp: front))
         }
-        switch AgentPolicy.decide(toolName: toolName, input: input, grants: grants, targetTitle: target) {
+        let asked = session
+        Task { [weak self] in
+            guard let self else { return }
+            let found = await self.lookUp(point)
+            guard self.session === asked, asked != nil else { return }
+            if let name = found.name {
+                self.model.retitle(id: stepID, title: AgentStepTitle.title(toolName: toolName, input: input, target: name))
+            }
+            self.decide(requestID, Pending(toolName: toolName, input: input, stepID: stepID, points: points,
+                                           found: found, frontApp: front))
+        }
+    }
+
+    private func decide(_ requestID: String, _ pending: Pending) {
+        guard !stopping, !ending else {
+            session?.answer(requestID: requestID, allow: false, input: pending.input, message: nil)
+            return model.finishStep(id: pending.stepID, state: .denied)
+        }
+        switch decision(for: pending) {
         case .allow:
             allow(requestID, pending)
         case .ask(let summary, let grantKey):
-            FlowLog.shared.write("agent: asking before \(toolName)")
+            FlowLog.shared.write("agent: asking before \(pending.toolName)")
             waiting[requestID] = pending
             model.ask(AgentApproval(id: requestID, summary: summary, grantKey: grantKey))
             chime()
         }
     }
 
-    /// Lets a step go ahead, first moving the panel out from under any point it acts on:
-    /// screenshots leave the panel out, so the agent can't see it's there.
+    /// A click still landing on a LocalFlow window (the Ask window, an answer) asks: the
+    /// agent can't see those, and they can start or approve things.
+    private func decision(for pending: Pending) -> AgentDecision {
+        if pending.found == .localFlow, !grants.contains(Self.localFlowGrant) {
+            return .ask(summary: "Click on a LocalFlow window", grantKey: Self.localFlowGrant)
+        }
+        return AgentPolicy.decide(toolName: pending.toolName, input: pending.input, grants: grants,
+                                  targetTitle: pending.found.name, frontApp: pending.frontApp)
+    }
+
+    private static let localFlowGrant = "click:localflow"
+
+    /// Lets a step go ahead, after one more check that the panel is clear of where it
+    /// acts (a card or step may have grown it since).
     private func allow(_ requestID: String, _ pending: Pending) {
-        pending.points.forEach { surface.moveAside(ifCovering: $0) }
+        surface.moveAside(avoiding: pending.points)
         session?.answer(requestID: requestID, allow: true, input: pending.input, message: nil)
     }
 
     /// After "Allow for this task", anything else waiting that it now covers goes ahead.
     private func allowWaitingCoveredByGrants() {
         for approval in model.approvals {
-            guard let pending = waiting[approval.id],
-                  AgentPolicy.decide(toolName: pending.toolName, input: pending.input, grants: grants,
-                                     targetTitle: pending.target) == .allow else { continue }
+            guard let pending = waiting[approval.id], decision(for: pending) == .allow else { continue }
             waiting[approval.id] = nil
             model.resolve(id: approval.id)
             allow(approval.id, pending)
@@ -301,6 +354,7 @@ final class AgentController {
         waiting = [:]
         grants = []
         openTurns = 0
+        ending = false
         _ = model.clearApprovals()
         if let error {
             model.endRunningSteps(as: .failed)
@@ -315,8 +369,10 @@ final class AgentController {
     }
 
     /// The global points a screen step acts on (where it clicks, drags or scrolls).
+    /// Mapped afresh each time, as the screen server does, so a display change mid-session
+    /// can't put the two out of step.
     private func pointerPoints(_ toolName: String, _ input: AgentJSON) -> [CGPoint] {
-        guard let mapping, toolName.hasPrefix(Self.screenTools) else { return [] }
+        guard toolName.hasPrefix(Self.screenTools), let mapping = mappingFor(displayID) else { return [] }
         let point = { (x: String, y: String) -> CGPoint? in
             guard let px = input[x]?.number, let py = input[y]?.number else { return nil }
             return mapping.toGlobal(x: px, y: py)

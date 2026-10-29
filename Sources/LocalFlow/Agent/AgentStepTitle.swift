@@ -55,8 +55,8 @@ enum AgentStepTitle {
     }
 
     private static func clip(_ text: String) -> String {
-        let line = text.split(whereSeparator: \.isNewline).joined(separator: " ")
-            .trimmingCharacters(in: .whitespaces)
+        let line = ShownText.visible(text.split(whereSeparator: \.isNewline).joined(separator: " ")
+            .trimmingCharacters(in: .whitespaces))
         return line.count <= maxLength ? line : String(line.prefix(maxLength - 1)) + "…"
     }
 }

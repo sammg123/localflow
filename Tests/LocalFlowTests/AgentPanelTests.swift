@@ -69,6 +69,43 @@ struct AgentModelTests {
         #expect(model.steps.count == 1)
     }
 
+    @Test("a step can be renamed once what it acts on is known")
+    func retitle() {
+        let model = AgentModel()
+        model.start(task: "t")
+        model.addStep(id: "a", title: "Click")
+
+        model.retitle(id: "a", title: "Click “Send”")
+
+        #expect(model.steps.first?.title == "Click “Send”")
+        #expect(model.steps.first?.state == .running)
+    }
+
+    @Test("dropping every waiting card goes back to working")
+    func clearBackToWorking() {
+        let model = AgentModel()
+        model.start(task: "t")
+        model.status = .working
+        model.ask(AgentApproval(id: "r1", summary: "s", grantKey: "k"))
+
+        #expect(model.clearApprovals() == ["r1"])
+        #expect(model.status == .working)
+    }
+
+    @Test("more while a card is up still says it needs an OK, and the clock restarts")
+    func followUpWhileAsking() {
+        let model = AgentModel()
+        model.start(task: "first")
+        model.status = .working
+        model.ask(AgentApproval(id: "r1", summary: "s", grantKey: "k"))
+        let firstStart = model.startedAt
+
+        model.followUp(task: "second")
+
+        #expect(model.status == .needsApproval)
+        #expect(model.startedAt >= firstStart)
+    }
+
     @Test("the same step reported twice shows once")
     func duplicateStep() {
         let model = AgentModel()
@@ -186,13 +223,33 @@ struct AgentPlacementTests {
         #expect(frame == NSRect(x: 1512 - 400 - 16, y: 944 - 200 - 16, width: 400, height: 200))
     }
 
-    @Test("the other corner is the top left")
-    func topLeft() {
-        let frame = AgentPlacement.frame(size: size, in: visible, corner: .topLeft)
+    @Test("the other corners are inset the same way")
+    func corners() {
+        #expect(AgentPlacement.frame(size: size, in: visible, corner: .topLeft)
+                 == NSRect(x: 16, y: 944 - 200 - 16, width: 400, height: 200))
+        #expect(AgentPlacement.frame(size: size, in: visible, corner: .bottomRight)
+                 == NSRect(x: 1512 - 400 - 16, y: 16, width: 400, height: 200))
+    }
 
-        #expect(frame == NSRect(x: 16, y: 944 - 200 - 16, width: 400, height: 200))
-        #expect(AgentPlacement.Corner.topRight.other == .topLeft)
-        #expect(AgentPlacement.Corner.topLeft.other == .topRight)
+    @Test("it stays put when nothing it covers is clicked")
+    func staysPut() {
+        let corner = AgentPlacement.corner(keeping: .topRight, size: size, in: visible, primaryHeight: 944,
+                                           avoiding: [CGPoint(x: 600, y: 500)])
+        #expect(corner == .topRight)
+    }
+
+    @Test("a click under it sends it to the other top corner")
+    func movesForClick() {
+        let corner = AgentPlacement.corner(keeping: .topRight, size: size, in: visible, primaryHeight: 944,
+                                           avoiding: [CGPoint(x: 1300, y: 100)])
+        #expect(corner == .topLeft)
+    }
+
+    @Test("a drag from under one top corner to under the other sends it to a bottom corner")
+    func dragAcrossTop() {
+        let corner = AgentPlacement.corner(keeping: .topRight, size: size, in: visible, primaryHeight: 944,
+                                           avoiding: [CGPoint(x: 1300, y: 100), CGPoint(x: 100, y: 100)])
+        #expect(corner == .bottomRight)
     }
 
     @Test("a window's frame converts to the top-left coordinates clicks use")
@@ -211,7 +268,9 @@ struct AgentPlacementTests {
         #expect(AgentPlacement.isCovering(CGPoint(x: 1200, y: 100), panel: panel))
         #expect(AgentPlacement.isCovering(CGPoint(x: 1090, y: 100), panel: panel))
         #expect(!AgentPlacement.isCovering(CGPoint(x: 600, y: 400), panel: panel))
-        #expect(!AgentPlacement.isCovering(CGPoint(x: 1200, y: 300), panel: panel))
+        // Room is left for it to grow as steps come in.
+        #expect(AgentPlacement.isCovering(CGPoint(x: 1200, y: 300), panel: panel))
+        #expect(!AgentPlacement.isCovering(CGPoint(x: 1200, y: 500), panel: panel))
     }
 }
 

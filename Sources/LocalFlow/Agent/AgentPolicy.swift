@@ -17,14 +17,18 @@ enum AgentPolicy {
 
     private static let readOnly: Set<String> = ["Read", "Glob", "Grep", "WebFetch", "WebSearch", "TodoWrite"]
     private static let fileWriters: Set<String> = ["Write", "Edit"]
-    private static let screenSafe: Set<String> = ["screenshot", "list_apps", "wait", "move", "scroll", "open_app", "drag"]
+    private static let screenSafe: Set<String> = ["screenshot", "list_apps", "wait", "move", "scroll", "drag"]
+    private static let screenChecked: Set<String> = ["click", "type", "key", "open_app"]
 
-    /// `targetTitle` is the accessibility title of the control under a click, when known.
+    /// `targetTitle` is the accessibility title of the control under a click, when known;
+    /// `frontApp` the bundle id of the app in front.
     static func decide(toolName: String, input: AgentJSON, grants: Set<String>, targetTitle: String?,
-                       home: String = NSHomeDirectory()) -> AgentDecision {
-        let asks = reasons(toolName: toolName, input: input, targetTitle: targetTitle, home: home)
-        return asks.first { !grants.contains($0.grantKey) }.map { .ask(summary: $0.summary, grantKey: $0.grantKey) }
-            ?? .allow
+                       frontApp: String? = nil, home: String = NSHomeDirectory()) -> AgentDecision {
+        let screen = AgentScreenRules.Place(targetTitle: targetTitle, frontApp: frontApp)
+        let asks = reasons(toolName: toolName, input: input, screen: screen, home: home)
+        // Kinds allowed only one at a time ask whatever was allowed before.
+        let open = asks.first { !grants.contains($0.grantKey) || !AgentApproval.canGrant($0.grantKey) }
+        return open.map { .ask(summary: $0.summary, grantKey: $0.grantKey) } ?? .allow
     }
 
     private struct Reason {
@@ -32,17 +36,18 @@ enum AgentPolicy {
         let grantKey: String
     }
 
-    private static func reasons(toolName: String, input: AgentJSON, targetTitle: String?, home: String) -> [Reason] {
+    private static func reasons(toolName: String, input: AgentJSON, screen: AgentScreenRules.Place,
+                                home: String) -> [Reason] {
         if readOnly.contains(toolName) { return [] }
         if toolName == "Bash" { return bash(input, home: home) }
         if fileWriters.contains(toolName) { return file(input, home: home) }
         if toolName.hasPrefix(screenPrefix) {
             let action = String(toolName.dropFirst(screenPrefix.count))
             if screenSafe.contains(action) { return [] }
-            if let reason = AgentScreenRules.reason(action: action, input: input, targetTitle: targetTitle) {
+            if let reason = AgentScreenRules.reason(action: action, input: input, at: screen) {
                 return [Reason(summary: reason.summary, grantKey: reason.grantKey)]
             }
-            if ["click", "type", "key"].contains(action) { return [] }
+            if screenChecked.contains(action) { return [] }
         }
         return [Reason(summary: "Use \(toolName)", grantKey: "tool:\(toolName)")]
     }
@@ -68,86 +73,9 @@ enum AgentPolicy {
         return [Reason(summary: "Write `\(clip(full))`", grantKey: "file:" + full)]
     }
 
-    /// At most `shownLimit` characters on one line.
+    /// At most `shownLimit` characters on one line, hidden characters showing.
     static func clip(_ text: String) -> String {
-        let line = text.replacingOccurrences(of: "\n", with: " ")
+        let line = ShownText.visible(text.replacingOccurrences(of: "\n", with: " "))
         return line.count <= shownLimit ? line : String(line.prefix(shownLimit - 1)) + "…"
-    }
-}
-
-/// Clicks, typing and key presses on the screen: they ask when marked irreversible, when
-/// the button's title sends, pays or deletes, or for keys that delete.
-enum AgentScreenRules {
-    /// Button words that send, pay, delete or commit, matched as whole words or phrases.
-    static let riskyTitles = ["place order", "empty trash", "reply all", "send", "submit", "post", "publish", "pay",
-                              "buy", "purchase", "order", "checkout", "delete", "remove", "erase", "trash", "transfer",
-                              "confirm", "sign", "accept", "unsubscribe"]
-    /// Phrases with a risky word in them that are everyday clicks.
-    static let everydayTitles = ["sign in", "sign out"]
-    /// Keys that delete when pressed with cmd (cmd+delete, cmd+shift+delete, cmd+option+delete …).
-    static let deleteKeys: Set<String> = ["delete", "forwarddelete"]
-
-    static func reason(action: String, input: AgentJSON, targetTitle: String?) -> (summary: String, grantKey: String)? {
-        let irreversible = input["irreversible"]?.bool == true || input["irreversible"]?.string == "true"
-        switch action {
-        case "click":
-            if let title = targetTitle, let word = riskyWord(in: title) {
-                return ("Click “\(AgentPolicy.clip(title))”", "click:" + word)
-            }
-            return irreversible ? ("Click at (\(coordinate(input["x"])), \(coordinate(input["y"])))", "click:irreversible") : nil
-        case "type":
-            let text = AgentPolicy.clip(input["text"]?.string ?? "")
-            return irreversible ? ("Type “\(text)”", "type:irreversible") : nil
-        case "key":
-            let keys = input["keys"]?.string ?? ""
-            if let combo = keyCombos(keys).first(where: isDestructive) {
-                return ("Press \(combo)", "key:" + combo)
-            }
-            return irreversible ? ("Press \(keys)", "key:irreversible") : nil
-        default:
-            return nil
-        }
-    }
-
-    static func isDestructive(_ combo: String) -> Bool {
-        let parts = combo.split(separator: "+").map(String.init)
-        return parts.contains("cmd") && parts.last.map(deleteKeys.contains) == true
-    }
-
-    /// The first risky word or phrase in a title, ignoring case, look-alike forms and
-    /// invisible characters, and everyday phrases.
-    static func riskyWord(in title: String) -> String? {
-        let visible = String(String.UnicodeScalarView(title.precomposedStringWithCompatibilityMapping.unicodeScalars
-            .filter { $0.properties.generalCategory != .format }))
-        let cleaned = everydayTitles.reduce(visible.lowercased()) { text, phrase in
-            text.replacingOccurrences(of: #"\b\#(phrase)\b"#, with: " ", options: .regularExpression)
-        }
-        return riskyTitles.first { word in
-            cleaned.range(of: #"\b\#(NSRegularExpression.escapedPattern(for: word))\b"#,
-                          options: .regularExpression) != nil
-        }
-    }
-
-    /// Each combo in `keys` written one way: lowercase, modifiers in a fixed order.
-    static func keyCombos(_ keys: String) -> [String] {
-        let aliases = ["command": "cmd", "⌘": "cmd", "meta": "cmd", "super": "cmd", "alt": "option", "opt": "option",
-                       "⌥": "option", "control": "ctrl", "⌃": "ctrl", "⇧": "shift", "backspace": "delete",
-                       "⌫": "delete", "⌦": "forwarddelete", "fwddelete": "forwarddelete"]
-        let order = ["cmd", "ctrl", "option", "shift"]
-        let joined = keys.lowercased().replacingOccurrences(of: #"\s*\+\s*"#, with: "+", options: .regularExpression)
-        return joined.split(whereSeparator: { $0 == " " || $0 == "," }).map { combo in
-            let parts = combo.split(separator: "+").map { part in
-                let trimmed = part.trimmingCharacters(in: .whitespaces)
-                return aliases[trimmed] ?? trimmed
-            }
-            let modifiers = order.filter(parts.contains)
-            let rest = parts.filter { !order.contains($0) }
-            return (modifiers + rest).joined(separator: "+")
-        }
-    }
-
-    private static func coordinate(_ value: AgentJSON?) -> String {
-        guard let number = value?.number, number.isFinite, abs(number) < 1e9 else { return "?" }
-        return number.rounded() == number ? String(Int(number)) : String(number)
     }
 }

@@ -7,8 +7,9 @@ struct AgentPolicyTests {
     private static let home = "/Users/me"
 
     private func decide(_ tool: String, _ input: AgentJSON, grants: Set<String> = [],
-                        title: String? = nil) -> AgentDecision {
-        AgentPolicy.decide(toolName: tool, input: input, grants: grants, targetTitle: title, home: Self.home)
+                        title: String? = nil, app: String? = nil) -> AgentDecision {
+        AgentPolicy.decide(toolName: tool, input: input, grants: grants, targetTitle: title, frontApp: app,
+                           home: Self.home)
     }
 
     private func bash(_ command: String, grants: Set<String> = []) -> AgentDecision {
@@ -199,11 +200,82 @@ struct AgentPolicyTests {
         #expect(grantKey(decide("Bash", ["description": "x"])) == "Bash:unknown")
     }
 
+    @Test("running LocalFlow or its screen server from a command asks, one at a time", arguments: [
+        "~/Applications/LocalFlow.app/Contents/MacOS/LocalFlow --computer-mcp --display 1",
+        "/Applications/LocalFlow.app/Contents/MacOS/LocalFlow --computer-mcp",
+        "cd ~/Applications/LocalFlow.app/Contents/MacOS && ./LocalFlow --computer-mcp",
+        "x=--computer-mcp; ./LocalFlow $x", "echo '{}' | LocalFlow --COMPUTER-MCP",
+        #"/Applications/Local""Flow.app/Contents/MacOS/Local""Flow --computer-""mcp"#,
+        #"cd ~/Applications/Local''Flow.app/Contents/MacOS && ./Local""Flow --x"#, #"L\ocalFlow --x"#,
+    ])
+    func localFlowItself(command: String) {
+        #expect(grantKey(bash(command)) == "Bash:localflow")
+        #expect(bash(command, grants: ["Bash:localflow"]) != .allow)
+    }
+
+    @Test("opening a script, app or installer from a command asks", arguments: [
+        "open ~/Desktop/run.command", "open -a Terminal ~/x.sh", "open -a iTerm .", "open -b com.apple.Terminal x",
+        "open Evil.app", "open /tmp/Evil.app/", "open x.scpt", "open flow.workflow", "open x.terminal", "open a.tool",
+        "open setup.pkg", "open profile.mobileconfig", "open -n -a 'Script Editor'", "open --env FOO=1 -a Safari",
+        "open -a Safari --args --load-extension=x", "open run.COMMAND",
+    ])
+    func openPrograms(command: String) {
+        #expect(grantKey(bash(command)) == "Bash:open program")
+        #expect(bash(command, grants: ["Bash:open program"]) != .allow)
+    }
+
+    @Test("a LocalFlow path hidden by globs can't be checked, so it asks every time")
+    func localFlowGlobbed() {
+        let decision = bash("/Applications/LocalFl*/Contents/MacOS/Local* --computer-m*")
+        #expect(decision != .allow)
+        #expect(grantKey(decision).map(AgentApproval.canGrant) == false)
+    }
+
+    @Test("opening a file with no extension asks (it may run), and a folder doesn't")
+    func openExtensionless() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("open-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let script = folder.appendingPathComponent("runme")
+        try "echo hi".write(to: script, atomically: true, encoding: .utf8)
+        #expect(grantKey(bash("open \(script.path)")) == "Bash:open program")
+        #expect(grantKey(bash("cd \(folder.path) && open runme")) == "Bash:open program")
+        #expect(bash("open \(folder.path)") == .allow)
+    }
+
+    @Test("links that run shortcuts, change settings or open files ask", arguments: [
+        "open shortcuts://run-shortcut?name=x", "open 'x-apple.systempreferences:com.apple.preference.security'",
+        "open file:///tmp/a.command", "open -u shortcuts://x",
+    ])
+    func openRiskyLinks(command: String) {
+        #expect(grantKey(bash(command)) == "Bash:open program")
+    }
+
+    @Test("opening documents, folders and web pages doesn't ask", arguments: [
+        "open https://example.com", "open .", "open report.pdf", "open -a Safari https://x.com", "open -R notes.md",
+        "open -a Preview a.png b.png", "open ~/Downloads",
+    ])
+    func openDocuments(command: String) {
+        #expect(bash(command) == .allow)
+    }
+
+    @Test("hidden characters that reorder text show in the card")
+    func bidiShown() throws {
+        let decision = bash("rm \"invoice\u{202E}fdp.sh\"")
+        guard case .ask(let summary, _) = decision else {
+            Issue.record("expected ask")
+            return
+        }
+        #expect(!summary.unicodeScalars.contains { $0.value == 0x202E })
+        #expect(summary.contains("\u{FFFD}"))
+    }
+
     // MARK: Files
 
     @Test("writing ordinary files doesn't ask", arguments: [
         "/Users/me/proj/a.swift", "/tmp/x.txt", "notes.txt", "/Users/me/.zshrc.bak", "/Users/me/.sshkeys/x",
         "/Users/me/Library/Application Support/Foo/x", "/var/folders/ab/T/x", "/usrlocal/x",
+        "/Users/me/Library/Application Support/LocalFlow/agent/report.md",
     ])
     func writesAllowed(path: String) {
         #expect(decide("Write", ["file_path": .string(path), "content": "x"]) == .allow)
@@ -218,6 +290,11 @@ struct AgentPolicyTests {
         "../../../../.zshrc", "/Users/me/Library/LaunchAgents/x.plist",
         "/Users/me/Library/Application Support/LocalFlow/claude/settings.json",
         "/Users/me/.gitconfig", "/Users/me/.claude/settings.json", "/Users/me/proj/.git/hooks/pre-commit",
+        "/Users/me/Applications/LocalFlow.app/Contents/MacOS/LocalFlow", "/Applications/LocalFlow.app/Contents/Info.plist",
+        "/Users/me/Library/Application Support/LocalFlow/Sign in to Claude.command",
+        "/Users/me/Library/Application Support/LocalFlow/ask-chats.json",
+        "/Users/me/Library/Application Support/LocalFlow/agent/CLAUDE.md", "/Users/me/Library/Preferences/com.localflow.plist",
+        "/Users/me/Library/Preferences/com.apple.dock.plist",
     ])
     func writesAsk(path: String) {
         let decision = decide("Write", ["file_path": .string(path), "content": "x"])
@@ -255,7 +332,7 @@ struct AgentPolicyTests {
 
     // MARK: Screen
 
-    @Test("looking, moving, scrolling and opening apps don't ask", arguments: [
+    @Test("looking, moving, scrolling and opening everyday apps don't ask", arguments: [
         "screenshot", "list_apps", "wait", "move", "scroll", "open_app", "drag",
     ])
     func screenAllowed(tool: String) {
@@ -297,11 +374,17 @@ struct AgentPolicyTests {
         ("Delete", "click:delete"), ("Remove from cart", "click:remove"), ("Erase", "click:erase"),
         ("Move to Trash", "click:trash"), ("Empty Trash…", "click:empty trash"), ("Transfer", "click:transfer"),
         ("Confirm", "click:confirm"), ("Sign", "click:sign"), ("Accept", "click:accept"),
-        ("Unsubscribe", "click:unsubscribe"), ("Reply All", "click:reply all"), ("Se\u{200B}nd", "click:send"),
+        ("Unsubscribe", "click:unsubscribe"), ("Reply All", "click:reply all"),
     ] as [(String, String)])
     func riskyTitles(title: String, key: String) {
         #expect(decide("mcp__localflow__click", ["x": 1, "y": 2], title: title)
             == .ask(summary: "Click “\(title)”", grantKey: key))
+    }
+
+    @Test("a hidden character in a button title still asks, and shows in the card")
+    func hiddenCharacterTitle() {
+        #expect(decide("mcp__localflow__click", ["x": 1, "y": 2], title: "Se\u{200B}nd")
+            == .ask(summary: "Click “Se\u{FFFD}nd”", grantKey: "click:send"))
     }
 
     @Test("titles that only contain a risky word inside another word don't ask", arguments: [
@@ -323,9 +406,69 @@ struct AgentPolicyTests {
         ("cmd+shift+delete", "key:cmd+shift+delete"), ("shift+cmd+delete", "key:cmd+shift+delete"),
         ("cmd+option+delete", "key:cmd+option+delete"), ("command+alt+backspace", "key:cmd+option+delete"),
         ("cmd + delete", "key:cmd+delete"), ("cmd+option+shift+delete", "key:cmd+option+shift+delete"),
+        ("cmd+forward_delete", "key:cmd+forwarddelete"), ("cmd+back_space", "key:cmd+delete"),
+        ("CMD+FORWARD_DELETE", "key:cmd+forwarddelete"), ("cmd+Back_Space", "key:cmd+delete"),
     ] as [(String, String)])
     func destructiveKeys(keys: String, key: String) {
         #expect(grantKey(decide("mcp__localflow__key", ["keys": .string(keys)])) == key)
+    }
+
+    @Test("any spelling the key tool reads as cmd+delete asks", arguments: [
+        "command+Delete", "super+delete", "cmd+_delete_", "cmd+forward_delete_",
+    ])
+    func destructiveBySpelling(keys: String) {
+        #expect(KeyCombo.parse(keys) != nil)
+        #expect(decide("mcp__localflow__key", ["keys": .string(keys)]) != .allow)
+    }
+
+    @Test("cmd+return asks: it sends in mail and chat apps")
+    func commandReturn() {
+        #expect(decide("mcp__localflow__key", ["keys": "cmd+return"])
+            == .ask(summary: "Press cmd+return (it may send)", grantKey: "key:send"))
+        #expect(grantKey(decide("mcp__localflow__key", ["keys": "Cmd+Enter"])) == "key:send")
+        #expect(decide("mcp__localflow__key", ["keys": "cmd+return"], grants: ["key:send"]) == .allow)
+    }
+
+    @Test("return asks in a mail or chat app, and nowhere else", arguments: [
+        "com.apple.MobileSMS", "com.apple.mail", "com.tinyspeck.slackmacgap", "net.whatsapp.WhatsApp",
+        "ru.keepcoder.Telegram", "com.hnc.Discord", "com.microsoft.teams2", "com.microsoft.Outlook",
+    ])
+    func returnInMessenger(app: String) {
+        #expect(decide("mcp__localflow__key", ["keys": "return"], app: app)
+            == .ask(summary: "Press return (it may send)", grantKey: "key:send"))
+        #expect(grantKey(decide("mcp__localflow__key", ["keys": "enter"], app: app)) == "key:send")
+        #expect(decide("mcp__localflow__key", ["keys": "shift+return"], app: app) == .allow)
+        #expect(grantKey(decide("mcp__localflow__type", ["text": "on my way\n"], app: app)) == "type:send")
+        #expect(decide("mcp__localflow__type", ["text": "on my way"], app: app) == .allow)
+    }
+
+    @Test("return and typed lines don't ask outside mail and chat apps", arguments: [
+        nil, "com.apple.Safari", "com.google.Chrome", "com.apple.TextEdit",
+    ] as [String?])
+    func returnElsewhere(app: String?) {
+        #expect(decide("mcp__localflow__key", ["keys": "return"], app: app) == .allow)
+        #expect(decide("mcp__localflow__type", ["text": "line one\nline two"], app: app) == .allow)
+    }
+
+    @Test("opening a terminal, script runner or System Settings asks", arguments: [
+        "Terminal", "terminal.app", " Terminal ", "com.apple.Terminal", "iTerm", "iTerm2", "com.googlecode.iterm2",
+        "Script Editor", "Automator", "Shortcuts", "System Settings", "System Preferences", "Keychain Access",
+        "Warp", "Ghostty", "com.apple.systempreferences",
+    ])
+    func riskyApps(name: String) {
+        let decision = decide("mcp__localflow__open_app", ["name": .string(name)])
+        guard case .ask(let summary, let key) = decision else {
+            Issue.record("expected ask for \(name)")
+            return
+        }
+        #expect(summary.hasPrefix("Open "))
+        #expect(key.hasPrefix("open:"))
+        #expect(decide("mcp__localflow__open_app", ["name": .string(name)], grants: [key]) == .allow)
+    }
+
+    @Test("opening everyday apps doesn't ask", arguments: ["Safari", "Mail", "Notes", "com.apple.Safari", "Finder"])
+    func everydayApps(name: String) {
+        #expect(decide("mcp__localflow__open_app", ["name": .string(name)]) == .allow)
     }
 
     // MARK: Anything else

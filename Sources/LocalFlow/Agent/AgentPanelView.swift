@@ -21,6 +21,10 @@ struct AgentPanelView: View {
     /// False in render tests: ImageRenderer can't draw a ScrollView.
     var scrolls = true
     var onAnswer: (AgentApproval, AgentAnswer) -> Void = { _, _ in }
+    /// The pointer went down on an Allow button (true) or the press ended (false); Allow checks for it.
+    var onPressed: (AgentApproval, AgentAnswer, Bool) -> Void = { _, _, _ in }
+    /// A card came up; its Allow buttons wait a moment before taking a click.
+    var onShown: (AgentApproval) -> Void = { _ in }
     var onStop: () -> Void = {}
     var onCopy: () -> Void = {}
     var onClose: () -> Void = {}
@@ -37,7 +41,10 @@ struct AgentPanelView: View {
                 .fixedSize(horizontal: false, vertical: true)
             steps
             if let approval = model.approvals.first {
-                ApprovalCard(approval: approval, waiting: model.approvals.count - 1, onAnswer: onAnswer)
+                ApprovalCard(approval: approval, waiting: model.approvals.count - 1, onAnswer: onAnswer,
+                             onPressed: onPressed)
+                    .id(approval.id)
+                    .onAppear { onShown(approval) }
             }
             reply
             footer
@@ -227,6 +234,7 @@ private struct ApprovalCard: View {
     let approval: AgentApproval
     let waiting: Int
     let onAnswer: (AgentApproval, AgentAnswer) -> Void
+    let onPressed: (AgentApproval, AgentAnswer, Bool) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -240,13 +248,17 @@ private struct ApprovalCard: View {
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
                 pill("Deny", fill: Color.white.opacity(0.12)) { onAnswer(approval, .deny) }
-                Spacer(minLength: 0)
-                Button("Allow for this task") { onAnswer(approval, .allowForTask) }
                     .buttonStyle(.plain)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(AgentStyle.secondary)
-                    .help("Allow this kind of step until the task is done")
+                Spacer(minLength: 0)
+                if approval.canAllowForTask {
+                    Button("Allow for this task") { onAnswer(approval, .allowForTask) }
+                        .buttonStyle(PressTracking { onPressed(approval, .allowForTask, $0) })
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(AgentStyle.secondary)
+                        .help("Allow this kind of step until the task is done")
+                }
                 pill("Allow", fill: AgentStyle.green) { onAnswer(approval, .allowOnce) }
+                    .buttonStyle(PressTracking { onPressed(approval, .allowOnce, $0) })
             }
             if waiting > 0 {
                 Text(waiting == 1 ? "1 more waiting" : "\(waiting) more waiting")
@@ -270,7 +282,19 @@ private struct ApprovalCard: View {
                 .frame(height: 28)
                 .background(Capsule().fill(fill))
         }
-        .buttonStyle(.plain)
+    }
+
+    /// Looks like `.plain`, and says when the pointer goes down on the button and when
+    /// that press ends: an accessibility press never does either, so Allow can tell a real
+    /// click from one.
+    private struct PressTracking: ButtonStyle {
+        let onPress: (Bool) -> Void
+
+        func makeBody(configuration: Configuration) -> some View {
+            configuration.label
+                .contentShape(Rectangle())
+                .onChange(of: configuration.isPressed) { _, isPressed in onPress(isPressed) }
+        }
     }
 
     /// Plain text with backticked parts in code type; never parsed as markdown.

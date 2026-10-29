@@ -22,7 +22,18 @@ enum AgentBash {
     static let maxDepth = 8
 
     static func risks(in command: String, at place: Place) -> [Risk] {
-        risks(in: command, depth: 0, place, directory: place.workingDirectory)
+        launchesLocalFlow(command) + risks(in: command, depth: 0, place, directory: place.workingDirectory)
+    }
+
+    /// LocalFlow's app or its screen server named anywhere in the line: run that way, it
+    /// would act on the screen past every check here. Each command's words are checked
+    /// again once unquoted (`Local""Flow`), in AgentCommands.
+    static let localFlowMarks = ["computer-mcp", "localflow.app", "macos/localflow"]
+
+    private static func launchesLocalFlow(_ command: String) -> [Risk] {
+        let lower = command.lowercased()
+        guard localFlowMarks.contains(where: lower.contains) else { return [] }
+        return [Risk(label: "Run LocalFlow itself", key: "Bash:localflow", shown: command)]
     }
 
     /// `directory` is where the text starts running, nil when a `cd` made it unknowable.

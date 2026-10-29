@@ -29,6 +29,11 @@ enum AgentCommands {
         }
         let command = Words.name(first)
         let args = Array(words.dropFirst())
+        if command == "localflow" || words.contains(where: { word in
+            AgentBash.localFlowMarks.contains(where: word.lowercased().contains)
+        }) {
+            return [context.risk("Run LocalFlow itself", "Bash:localflow")]
+        }
         let globbed = !["[", "[["].contains(command) && command.contains(where: { "*?[".contains($0) })
         if globbed || hasBraceExpansion(first) || subcommands(command, args).contains(where: isOpaque) {
             return [context.risk("Run a command that can't be checked", "Bash:complex")]
@@ -110,6 +115,9 @@ enum AgentCommands {
         case "watch": // runs its words as one shell command, again and again
             return context.nested(Words.afterOptions(args, valued: ["-n", "--interval"]).joined(separator: " "))
         case "gh": return gh(args).map { [context.risk(nil, "Bash:gh " + $0)] } ?? []
+        case "open":
+            let runs = AgentApps.opensProgram(args, directory: context.directory, home: context.place.home)
+            return runs ? [context.risk("Open a program", "Bash:open program")] : []
         case "curl": return AgentNetwork.curlSends(args) ? [context.risk("Send data", "Bash:curl send")] : []
         case "wget": return AgentNetwork.wgetSends(args) ? [context.risk("Send data", "Bash:wget send")] : []
         case "defaults": return defaults(args).map { [context.risk("Change system settings", "Bash:defaults " + $0)] } ?? []

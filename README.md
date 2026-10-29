@@ -36,6 +36,7 @@ release ──► rule cleanup (fillers, replacements, spoken commands)
 | Tap **Right ⌥** again | Voice on: your words appear as you talk, after anything typed. Tap again to stop and keep editing |
 | Hold **Right ⌥** | Talk while held (start after the chime); the words land in the Ask window |
 | Return or the send button | Send the question (nothing is sent before this). Shift+Return = new line, Esc or ✕ = cancel |
+| ⌘Return or **Do it** | Hand it to the agent instead, which does it on your Mac (see Agent below) |
 | Esc, or click **–** on the answer | Tuck it into a chip in the bottom-right corner (the answer keeps coming). Esc again or a click on the chip brings it back |
 | **Shift+Esc**, Fn, or click ✕ | Close the answer (also cancels one still coming), from the bubble or the chip. Fn leaves a tucked answer alone. Right ⌥ closes it and starts a new question |
 
@@ -64,6 +65,15 @@ Tap the Ask key (Right ⌥ by default, Settings → General) to type, and tap it
 - Pressing another key while the Ask key is held (Option+arrow, Option+letter) is treated as a shortcut: the window never opens, and inside the window it types the character.
 - The window takes the keyboard while it's open (⌘V, ⌘A, ⌘Z work), without switching apps; Esc or sending hands it back.
 - Weak spot: it reads screens reliably but multi-step reasoning (e.g. writing the next lines of code) can be wrong. Check its work.
+
+## Agent (Do it)
+
+Write or say a task in the Ask window and press **⌘Return** or **Do it** instead of Return. An agent then does it on your Mac: it runs Terminal commands (in the background too), reads and edits your files anywhere in your home folder, and looks at the screen, clicks, types and presses keys in apps. A panel in the top-right corner shows the task, each step in plain words ("Run the tests", "Click “New Message”"), and its reply when it's done; a green outline around the screen means it's working. **Stop** ends what it's doing; ✕ ends the session and stops anything it left running in the background (quitting LocalFlow does too).
+
+- **Risky steps wait for you.** Looking, reading, searching and ordinary commands just run. Anything that deletes, sends, posts, buys, pushes, publishes, installs, uses sudo, touches system, shell-startup or LocalFlow's own files, opens a Terminal, script or System Settings, presses Return in a mail or chat app, or clicks a button like Send, Delete or Place order shows a card: **Deny**, **Allow**, or **Allow for this task** (that kind of step stops asking until you close the panel; commands it can't read in full only ever get **Allow**). **Allow only takes a real click** from your mouse or trackpad, so the agent can't approve its own steps; a click it posts just beeps. It's a list of known risky things, so watch what it does with apps and commands it doesn't know.
+- **More:** with the panel up, ⌘Return in the Ask window again gives the same session more to do, with everything it already knows.
+- **How it runs:** Claude Code, headless, on your Claude plan through LocalFlow's own Claude sign-in (Settings → General → **Sign in to Claude…**), with none of your own Claude Code settings, hooks or CLAUDE.md. Default model `claude-opus-5-5` (Settings → **Agent model**). The screen tools are LocalFlow itself, started by Claude Code (`LocalFlow --computer-mcp`); they only run when LocalFlow started them, so no other program can borrow LocalFlow's Accessibility and Screen Recording. LocalFlow's own windows are left out of the agent's screenshots, and the panel moves to the other corner before the agent clicks where it is.
+- **This sends screenshots, the files and command output it reads, and your task to Anthropic**, and counts against your Claude plan's usage limits. The event log records only kinds of steps, never your task, commands, typed text, paths or replies.
 
 ## Diagnostics
 
@@ -97,6 +107,7 @@ First run:
 - Audio is held in memory only, never written to disk.
 - Dictation history is in-memory by default (Settings → "Save history to disk" to opt in).
 - Ask chats are saved to disk (see Ask → Chats) so they can be searched; delete any from Ask Chats.
+- The agent (Do it) sends what it works with to Anthropic; see Agent above.
 - Pasteboard entries are marked `org.nspasteboard.ConcealedType` so clipboard managers skip them.
 
 ## Feature parity vs Wispr Flow

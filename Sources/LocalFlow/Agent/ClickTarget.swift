@@ -12,6 +12,19 @@ enum ClickTarget {
     /// The longest an app gets to answer, so a frozen one can't hold up LocalFlow.
     static let timeout: Float = 0.5
 
+    /// What's under a point.
+    enum Found: Equatable, Sendable {
+        case named(String)
+        case unnamed
+        /// One of LocalFlow's own windows, which the agent can't see in its screenshots.
+        case localFlow
+
+        var name: String? {
+            if case .named(let name) = self { return name }
+            return nil
+        }
+    }
+
     struct ElementInfo: Equatable {
         var role: String?
         var title: String?
@@ -36,14 +49,17 @@ enum ClickTarget {
         return nil
     }
 
-    /// The name of what's at this global point (top-left origin), if anything has one.
-    static func label(at point: CGPoint) -> String? {
+    /// What's at this global point (top-left origin). Call it off the main thread: when
+    /// the point is on a LocalFlow window, LocalFlow's main thread has to answer.
+    static func find(at point: CGPoint) -> Found {
         let system = AXUIElementCreateSystemWide()
         // Set on the system-wide element, this is the limit for every element asked.
         AXUIElementSetMessagingTimeout(system, timeout)
         var element: AXUIElement?
         guard AXUIElementCopyElementAtPosition(system, Float(point.x), Float(point.y), &element) == .success,
-              let element else { return nil }
+              let element else { return .unnamed }
+        var owner: pid_t = 0
+        if AXUIElementGetPid(element, &owner) == .success, owner == getpid() { return .localFlow }
         var chain: [ElementInfo] = []
         var current: AXUIElement? = element
         while let node = current, chain.count < maxDepth {
@@ -52,7 +68,7 @@ enum ClickTarget {
                                      value: string(node, kAXValueAttribute)))
             current = parent(of: node)
         }
-        return label(for: chain)
+        return label(for: chain).map(Found.named) ?? .unnamed
     }
 
     private static func clean(_ text: String?) -> String? {

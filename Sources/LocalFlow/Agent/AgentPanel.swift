@@ -3,21 +3,38 @@ import SwiftUI
 
 /// Where the agent's window sits, and when it's in the way of a click.
 enum AgentPlacement {
-    enum Corner: Equatable {
+    enum Corner: Equatable, CaseIterable {
         case topRight
         case topLeft
-
-        var other: Corner { self == .topRight ? .topLeft : .topRight }
+        case bottomRight
+        case bottomLeft
     }
 
     static let inset: CGFloat = 16
     /// A click this close to the window counts as on it.
     static let margin: CGFloat = 8
+    /// Room above and below for the window to grow (a step, a card) after a check.
+    static let growth: CGFloat = 120
 
     /// The window's frame in a corner of the screen's visible area (AppKit coordinates).
     static func frame(size: NSSize, in visible: NSRect, corner: Corner) -> NSRect {
-        let x = corner == .topRight ? visible.maxX - size.width - inset : visible.minX + inset
-        return NSRect(x: x, y: visible.maxY - size.height - inset, width: size.width, height: size.height)
+        let right = corner == .topRight || corner == .bottomRight
+        let top = corner == .topRight || corner == .topLeft
+        let x = right ? visible.maxX - size.width - inset : visible.minX + inset
+        let y = top ? visible.maxY - size.height - inset : visible.minY + inset
+        return NSRect(x: x, y: y, width: size.width, height: size.height)
+    }
+
+    /// The corner to be in so none of `points` (global, top-left origin) lands on the
+    /// window: the current one if it's clear, else the first clear one.
+    static func corner(keeping current: Corner, size: NSSize, in visible: NSRect, primaryHeight: CGFloat,
+                       avoiding points: [CGPoint]) -> Corner {
+        let candidates = [current] + Corner.allCases.filter { $0 != current }
+        let clear = candidates.first { corner in
+            let global = globalRect(frame(size: size, in: visible, corner: corner), primaryHeight: primaryHeight)
+            return !points.contains { isCovering($0, panel: global) }
+        }
+        return clear ?? current
     }
 
     /// An AppKit frame (bottom-left origin) in the top-left global coordinates clicks use.
@@ -26,7 +43,7 @@ enum AgentPlacement {
     }
 
     static func isCovering(_ point: CGPoint, panel: CGRect) -> Bool {
-        panel.insetBy(dx: -margin, dy: -margin).contains(point)
+        panel.insetBy(dx: -margin, dy: -margin - growth).contains(point)
     }
 }
 
@@ -52,6 +69,7 @@ final class AgentPanel {
     private var screen: NSScreen?
     private var corner = AgentPlacement.Corner.topRight
     private var resizeObserver: NSObjectProtocol?
+    private let presses = AgentPressLog()
 
     var isVisible: Bool { panel.isVisible }
     var frame: NSRect { panel.frame }
@@ -84,7 +102,18 @@ final class AgentPanel {
         AgentPanelView(
             model: model,
             followUpHint: followUpHint,
-            onAnswer: { [weak self] approval, answer in self?.onAnswer?(approval, answer) },
+            onAnswer: { [weak self] approval, answer in self?.answer(approval, answer) },
+            onPressed: { [weak self] approval, answer, isPressed in
+                guard isPressed else {
+                    self?.presses.buttonReleased(approval.id, answer, during: NSApp.currentEvent?.type)
+                    return
+                }
+                FlowLog.shared.write("agent: pointer down on an Allow button")
+                self?.presses.buttonPressed(approval.id, answer, at: ProcessInfo.processInfo.systemUptime)
+            },
+            onShown: { [weak self] approval in
+                self?.presses.cardShown(approval.id, at: ProcessInfo.processInfo.systemUptime)
+            },
             onStop: { [weak self] in self?.onStop?() },
             onCopy: { [weak self] in self?.copyReply() },
             onClose: { [weak self] in self?.onClose?() }
@@ -116,14 +145,15 @@ final class AgentPanel {
         panel.orderOut(nil)
     }
 
-    /// Moves to the other corner when a click or drag at this global point (top-left
-    /// origin, as CGEvent uses) would land on the window. Returns whether it moved.
+    /// Moves to a corner clear of every point a click, drag or scroll acts on (global,
+    /// top-left origin, as CGEvent uses). Returns whether it moved.
     @discardableResult
-    func moveAside(ifCovering point: CGPoint) -> Bool {
-        guard panel.isVisible, let primary = NSScreen.screens.first else { return false }
-        let global = AgentPlacement.globalRect(panel.frame, primaryHeight: primary.frame.height)
-        guard AgentPlacement.isCovering(point, panel: global) else { return false }
-        corner = corner.other
+    func moveAside(avoiding points: [CGPoint]) -> Bool {
+        guard panel.isVisible, !points.isEmpty, let screen, let primary = NSScreen.screens.first else { return false }
+        let best = AgentPlacement.corner(keeping: corner, size: panel.frame.size, in: screen.visibleFrame,
+                                         primaryHeight: primary.frame.height, avoiding: points)
+        guard best != corner else { return false }
+        corner = best
         place()
         return true
     }
@@ -133,6 +163,22 @@ final class AgentPanel {
         let target = AgentPlacement.frame(size: panel.frame.size, in: screen.visibleFrame, corner: corner)
         guard target != panel.frame else { return }
         panel.setFrame(target, display: true)
+    }
+
+    /// An Allow that isn't the person's own click on it (one the agent posted or pressed
+    /// through accessibility, a stale click) does nothing but beep.
+    private func answer(_ approval: AgentApproval, _ answer: AgentAnswer) {
+        let verdict = AgentAnswerGate.check(answer, event: NSApp.currentEvent, in: panel,
+                                            press: presses.press(for: approval.id, answer),
+                                            now: ProcessInfo.processInfo.systemUptime)
+        guard verdict == .accepted else {
+            presses.consume(approval.id, answer)
+            FlowLog.shared.write("agent: ignored an Allow (\(verdict.reason))")
+            NSSound.beep()
+            return
+        }
+        presses.forget(approval.id)
+        onAnswer?(approval, answer)
     }
 
     private func copyReply() {

@@ -206,7 +206,7 @@ final class AppController {
     func shutdown() {
         handsFree?.cancel()
         askSession?.cancel()
-        agent?.close()
+        agent?.shutdown()
         ask?.dismiss()
         ask?.chats.flush()
         askHotkeyMonitor?.stopMonitoring()

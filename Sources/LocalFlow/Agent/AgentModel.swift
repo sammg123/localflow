@@ -56,6 +56,16 @@ struct AgentApproval: Identifiable, Equatable {
     let summary: String
     /// What "Allow for this task" allows from then on.
     let grantKey: String
+
+    /// Kinds too open to allow for the whole task: a command that can't be read in full,
+    /// LocalFlow itself, a program opened from the terminal.
+    static let oneAtATime: Set<String> = ["Bash:complex", "Bash:variable command", "Bash:curl | sh",
+                                          "Bash:pipe to shell", "Bash:unknown", "Bash:localflow", "click:localflow",
+                                          "Bash:open program"]
+
+    var canAllowForTask: Bool { Self.canGrant(grantKey) }
+
+    nonisolated static func canGrant(_ key: String) -> Bool { !oneAtATime.contains(key) }
 }
 
 /// What the agent panel shows. Never logged: tasks, steps and replies can hold anything.
@@ -88,8 +98,9 @@ final class AgentModel: ObservableObject {
     /// More for the same session: the new words become the task, the steps carry on.
     func followUp(task: String) {
         self.task = task
-        status = .working
+        status = approvals.isEmpty ? .working : .needsApproval
         reply = ""
+        startedAt = Date()
     }
 
     func addStep(id: String, title: String) {
@@ -103,6 +114,11 @@ final class AgentModel: ObservableObject {
     /// Only a running step finishes: one turned down stays turned down when its error arrives.
     func finishStep(id: String, state: AgentStep.State) {
         steps = steps.map { $0.id == id && $0.state == .running ? $0.with(state) : $0 }
+    }
+
+    /// Names a step better once what it acts on is known ("Click" → "Click “Send”").
+    func retitle(id: String, title: String) {
+        steps = steps.map { $0.id == id ? AgentStep(id: id, title: title, state: $0.state) : $0 }
     }
 
     /// Steps still running when the task ends didn't finish.
@@ -131,6 +147,7 @@ final class AgentModel: ObservableObject {
     func clearApprovals() -> [String] {
         let ids = approvals.map(\.id)
         approvals = []
+        if status == .needsApproval { status = .working }
         return ids
     }
 }

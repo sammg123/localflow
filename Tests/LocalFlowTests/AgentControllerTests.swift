@@ -31,6 +31,8 @@ final class FakeAgentSession: AgentSession, @unchecked Sendable {
     }
     func interrupt() { interrupts += 1 }
     func close() { closes += 1 }
+    private(set) var terminations = 0
+    func terminate() { terminations += 1 }
 }
 
 @MainActor
@@ -44,15 +46,19 @@ final class FakeAgentSurface: AgentSurface {
     /// The panel's spot in global points; a click inside it makes it move.
     var covers = CGRect(x: 900, y: 0, width: 380, height: 200)
     private(set) var movedFor: [CGPoint] = []
+    private(set) var isAside = false
     var journal: (String) -> Void = { _ in }
 
     func show(on screen: NSScreen?) { isVisible = true }
     func hide() { isVisible = false }
     func setFollowUpHint(_ hint: String) { self.hint = hint }
-    func moveAside(ifCovering point: CGPoint) -> Bool {
-        guard covers.contains(point) else { return false }
+    func moveAside(avoiding points: [CGPoint]) -> Bool {
+        let hit = points.filter { covers.contains($0) }
+        guard !hit.isEmpty else { return false }
         journal("moved")
-        movedFor.append(point)
+        movedFor += hit
+        isAside = true
+        covers = .zero
         return true
     }
 }
@@ -67,7 +73,8 @@ struct AgentControllerTests {
     private let made = Made()
     private var session: FakeAgentSession { made.sessions.last! }
 
-    private func makeController(target: String? = nil) -> AgentController {
+    private func makeController(target: String? = nil, frontApp: String? = nil,
+                                lookUp: (@MainActor (CGPoint) async -> ClickTarget.Found)? = nil) -> AgentController {
         AgentController(
             surface: surface,
             indicator: glow,
@@ -78,7 +85,8 @@ struct AgentControllerTests {
             },
             displayID: { _ in 1 },
             mapping: { _ in ScreenMapping(displayBounds: CGRect(x: 0, y: 0, width: 1280, height: 800)) },
-            targetTitle: { _ in target },
+            lookUp: lookUp ?? { _ in target.map { .named($0) } ?? .unnamed },
+            frontApp: { frontApp },
             chime: {},
             finished: { _ in }
         )
@@ -202,6 +210,43 @@ struct AgentControllerTests {
         #expect(surface.model.approvals.isEmpty)
     }
 
+    @Test("return asks when a chat app is in front, and goes ahead elsewhere")
+    func returnInChat() async {
+        let chat = makeController(frontApp: "com.apple.MobileSMS")
+        chat.run("t", on: nil)
+        session.emit(.permissionRequest(requestID: "r1", toolName: "mcp__localflow__key",
+                                        input: .object(["keys": .string("return")]), description: nil, toolUseID: "u1"))
+        await until { surface.model.approvals.count == 1 }
+        #expect(surface.model.approvals.first?.grantKey == "key:send")
+        #expect(session.answers.isEmpty)
+        chat.close()
+
+        let browser = makeController(frontApp: "com.apple.Safari")
+        browser.run("t", on: nil)
+        session.emit(.permissionRequest(requestID: "r2", toolName: "mcp__localflow__key",
+                                        input: .object(["keys": .string("return")]), description: nil, toolUseID: "u2"))
+        await until { session.answers.count == 1 }
+        #expect(session.answers.first?.allow == true)
+    }
+
+    @Test("allow for this task on a step that can't be read in full allows just that one")
+    func oneAtATime() async {
+        let agent = makeController()
+        agent.run("t", on: nil)
+        session.emit(.permissionRequest(requestID: "r1", toolName: "Bash", input: bash("eval \"$X\""),
+                                        description: nil, toolUseID: "u1"))
+        await until { surface.model.approvals.count == 1 }
+        let approval = surface.model.approvals[0]
+        #expect(!approval.canAllowForTask)
+
+        surface.onAnswer?(approval, .allowForTask)
+        #expect(session.answers.map(\.allow) == [true])
+        session.emit(.permissionRequest(requestID: "r2", toolName: "Bash", input: bash("eval \"$Y\""),
+                                        description: nil, toolUseID: "u2"))
+        await until { surface.model.approvals.count == 1 }
+        #expect(session.answers.count == 1)
+    }
+
     @Test("a click where the panel sits moves the panel first, then goes ahead")
     func clickMovesPanel() async {
         let agent = makeController()
@@ -216,6 +261,94 @@ struct AgentControllerTests {
 
         #expect(surface.movedFor == [CGPoint(x: 1000, y: 100)])
         #expect(order == ["moved", "answer r1 true"])
+    }
+
+    @Test("the panel moves out of the way before what's under a click is looked up")
+    func movesBeforeLookingUp() async {
+        var order: [String] = []
+        let agent = makeController(lookUp: { [surface] _ in
+            order.append(surface.isAside ? "looked up after moving" : "looked up under the panel")
+            return .named("Delete")
+        })
+        surface.journal = { order.append($0) }
+        agent.run("t", on: nil)
+
+        session.emit(.permissionRequest(requestID: "r1", toolName: "mcp__localflow__click", input: click(1000, 100),
+                                        description: nil, toolUseID: "u1"))
+        await until { !surface.model.approvals.isEmpty }
+
+        #expect(order == ["moved", "looked up after moving"])
+        #expect(surface.model.approvals.first?.summary.contains("Delete") == true)
+        #expect(surface.model.steps.first?.title == "Click “Delete”")
+    }
+
+    @Test("a click that would land on a LocalFlow window asks first")
+    func clickOnLocalFlow() async {
+        let agent = makeController(lookUp: { _ in .localFlow })
+        agent.run("t", on: nil)
+
+        session.emit(.permissionRequest(requestID: "r1", toolName: "mcp__localflow__click", input: click(300, 300),
+                                        description: nil, toolUseID: "u1"))
+        await until { !surface.model.approvals.isEmpty }
+
+        #expect(session.answers.isEmpty)
+        #expect(surface.model.approvals.first?.summary.contains("LocalFlow") == true)
+    }
+
+    @Test("a drag moves the panel off both of its ends")
+    func dragMovesPanel() async {
+        let agent = makeController()
+        agent.run("t", on: nil)
+        let input = AgentJSON.object(["from_x": .number(1000), "from_y": .number(100),
+                                      "to_x": .number(100), "to_y": .number(100)])
+
+        session.emit(.permissionRequest(requestID: "r1", toolName: "mcp__localflow__drag", input: input,
+                                        description: nil, toolUseID: "u1"))
+        await until { !session.answers.isEmpty }
+
+        #expect(surface.movedFor == [CGPoint(x: 1000, y: 100)])
+        #expect(session.answers.first?.allow == true)
+    }
+
+    @Test("Stop before it has started ends that session, and the next task starts a new one")
+    func stopWhileStarting() async {
+        let agent = makeController()
+        agent.run("first", on: nil)
+
+        surface.onStop?()
+        agent.run("second", on: nil)
+
+        #expect(made.sessions.first?.closes == 1)
+        #expect(made.sessions.count == 2)
+        #expect(session.started == ["second"])
+    }
+
+    @Test("Stop with more waiting to run ends the session instead of leaving it half-stopped")
+    func stopWithQueuedMore() async {
+        let agent = makeController()
+        agent.run("first", on: nil)
+        session.emit(.sessionStarted(sessionID: "s"))
+        await until { surface.model.status == .working }
+        agent.run("more", on: nil)
+
+        surface.onStop?()
+
+        #expect(session.closes == 1)
+        #expect(session.interrupts == 0)
+        session.end(nil)
+        await until { surface.model.status == .stopped }
+        #expect(surface.model.status == .stopped)
+    }
+
+    @Test("quitting LocalFlow stops the session at once")
+    func shutdown() {
+        let agent = makeController()
+        agent.run("t", on: nil)
+
+        agent.shutdown()
+
+        #expect(session.terminations == 1)
+        #expect(!surface.isVisible)
     }
 
     @Test("a click on a Send button asks first, naming the button")

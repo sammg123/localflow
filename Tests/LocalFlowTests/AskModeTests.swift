@@ -8,7 +8,7 @@ import Testing
 @MainActor
 final class FakeAgentInputHost: AgentInputHost {
     var hasConversation = false
-    var isInCorner = true
+    var isVisible = false
     var onInputSend: (() -> Void)?
     var onInputCancel: (() -> Void)?
     private(set) var shown: [(inPlace: Bool, agentMode: Bool)] = []
@@ -134,7 +134,7 @@ struct AskModeTests {
         #expect(agent.shown.isEmpty)
     }
 
-    @Test("with an agent conversation, the box goes in the agent's window at home, and the Ask window stays shut")
+    @Test("with the agent's window tucked away, the box brings it back at home, and the Ask window stays shut")
     func agentWindowAtHome() {
         let (router, ask, agent) = windows()
         agent.hasConversation = true
@@ -149,15 +149,20 @@ struct AskModeTests {
         #expect(ask.outcomes.isEmpty)
     }
 
-    @Test("opened for the agent while its window is in the corner, the box opens right there")
+    @Test("with the agent's window up, the box opens right where it is, for the agent or for Ask")
     func agentWindowInPlace() {
         let (router, _, agent) = windows()
         agent.hasConversation = true
-        router.model.reset(mode: .typing, agentMode: true)
+        agent.isVisible = true
 
+        router.model.reset(mode: .typing, agentMode: true)
+        router.show(on: nil)
+        router.finish(.cancelled)
+        router.model.reset(mode: .voice)
         router.show(on: nil)
 
-        #expect(agent.shown.first?.inPlace == true)
+        #expect(agent.shown.map(\.inPlace) == [true, true])
+        #expect(agent.shown.map(\.agentMode) == [true, false])
     }
 
     @Test("Return and Esc in the agent's window reach Ask")
@@ -199,16 +204,16 @@ struct AskModeTests {
 
     // MARK: Where the agent's window goes after the box
 
-    @Test("after the box: to the agent, the corner; a question, tucked away unless it's busy; Esc, back as it was")
+    @Test("after the box: to the agent, it stays up; a question, tucked away unless it's busy; Esc, back as it was")
     func afterTheBox() {
         typealias Exit = AgentInputExit
-        #expect(Exit.after(.handedToAgent, wasTucked: true, isWorking: false, isWaiting: false) == .corner)
+        #expect(Exit.after(.handedToAgent, wasTucked: true, isWorking: false, isWaiting: false) == .stays)
         #expect(Exit.after(.asked, wasTucked: false, isWorking: false, isWaiting: false) == .tuck)
-        #expect(Exit.after(.asked, wasTucked: false, isWorking: true, isWaiting: false) == .corner)
-        #expect(Exit.after(.asked, wasTucked: false, isWorking: false, isWaiting: true) == .corner)
-        #expect(Exit.after(.cancelled, wasTucked: false, isWorking: false, isWaiting: false) == .corner)
+        #expect(Exit.after(.asked, wasTucked: false, isWorking: true, isWaiting: false) == .stays)
+        #expect(Exit.after(.asked, wasTucked: false, isWorking: false, isWaiting: true) == .stays)
+        #expect(Exit.after(.cancelled, wasTucked: false, isWorking: false, isWaiting: false) == .stays)
         #expect(Exit.after(.cancelled, wasTucked: true, isWorking: false, isWaiting: false) == .tuck)
-        #expect(Exit.after(.cancelled, wasTucked: true, isWorking: true, isWaiting: false) == .corner)
+        #expect(Exit.after(.cancelled, wasTucked: true, isWorking: true, isWaiting: false) == .stays)
     }
 
     @Test("home is where the Ask window sits: centered at the bottom of the screen")

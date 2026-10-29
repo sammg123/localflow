@@ -12,7 +12,8 @@ enum AgentAnswer: Equatable {
 /// and its reply. Same black card as Ask, with a green edge (amber while it waits). When
 /// the user writes in it (Ask's box, opened here so there's only ever one window) the box
 /// sits under the conversation and the edge takes the box's color: blue to ask, green for
-/// the agent.
+/// the agent. Collapsed, it's a small capsule with the status. Dragged by its background,
+/// it moves.
 struct AgentPanelView: View {
     static let width: CGFloat = 400
     /// As wide as the Ask window, while it has the box.
@@ -20,11 +21,15 @@ struct AgentPanelView: View {
     static let shownSteps = 5
     static let maxReplyHeight: CGFloat = 220
     static let inputHeight: CGFloat = 64
+    /// The same size as the minimized answer.
+    static let collapsedSize = NSSize(width: 300, height: 40)
 
     @ObservedObject var model: AgentModel
     /// The box, shown when `showsInput`.
     @ObservedObject var input: ComposerModel
     var showsInput = false
+    /// Shrunk to a capsule with the status.
+    var collapsed = false
     /// What to do for more; set by the controller ("Right ⌥, then ⌘Return…").
     var followUpHint = ""
     /// False in render tests: ImageRenderer can't draw a ScrollView.
@@ -43,11 +48,36 @@ struct AgentPanelView: View {
     var onOpenConnectors: () -> Void = {}
     /// Puts back the files an Instant edit changed.
     var onUndo: () -> Void = {}
+    var onCollapse: () -> Void = {}
+    var onExpand: () -> Void = {}
+    /// The window is being dragged. It follows the real pointer; only the first move's
+    /// translation counts, for the points moved before the drag began.
+    /// How far the pointer has come, and where in the window it went down.
+    var onDragMoved: (CGSize, CGPoint) -> Void = { _, _ in }
+    var onDragEnded: () -> Void = {}
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject private var settings = Settings.shared
 
     var body: some View {
+        Group {
+            if collapsed {
+                collapsedBar
+            } else {
+                card
+            }
+        }
+        .gesture(dragToMove)
+    }
+
+    /// Past a few points the window moves with the pointer; buttons and the box keep their clicks.
+    private var dragToMove: some Gesture {
+        DragGesture(minimumDistance: 3)
+            .onChanged { value in onDragMoved(value.translation, value.startLocation) }
+            .onEnded { _ in onDragEnded() }
+    }
+
+    private var card: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
             Text(model.task)
@@ -79,8 +109,40 @@ struct AgentPanelView: View {
             RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .strokeBorder(edgeColor, lineWidth: showsInput ? ComposerTint.edgeWidth(agentMode: input.agentMode) : 1)
         )
+        .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: model.steps)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: model.approvals)
+    }
+
+    /// The status, still counting, with a way back to the whole window and a way to close.
+    private var collapsedBar: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 10) {
+                statusMark
+                statusLine
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(AgentStyle.primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onExpand)
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityHint(model.task)
+            .accessibilityAction(.default, onExpand)
+            WindowIconButton(symbol: "chevron.down", label: "Expand", help: "Show the whole window",
+                             action: onExpand)
+            WindowIconButton(symbol: "xmark", label: "Close",
+                             help: model.status.isWorking ? "Stop and close" : "Close", action: onClose)
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 9)
+        .frame(width: Self.collapsedSize.width, height: Self.collapsedSize.height)
+        .background(Capsule().fill(Color.black.opacity(0.96)))
+        .overlay(Capsule().strokeBorder(edgeColor))
+        .contentShape(Capsule())
     }
 
     private var edgeColor: Color {
@@ -115,17 +177,23 @@ struct AgentPanelView: View {
         .padding(.top, 2)
     }
 
+    /// The green (amber, red) dot, or Instant's bolt.
+    @ViewBuilder
+    private var statusMark: some View {
+        if model.isInstant {
+            Image(systemName: "bolt.fill")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(AgentStyle.yellow)
+                .frame(width: 8, height: 8)
+                .accessibilityLabel("Instant Edits")
+        } else {
+            Circle().fill(dotColor).frame(width: 8, height: 8)
+        }
+    }
+
     private var header: some View {
         HStack(spacing: 8) {
-            if model.isInstant {
-                Image(systemName: "bolt.fill")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(AgentStyle.yellow)
-                    .frame(width: 8, height: 8)
-                    .accessibilityLabel("Instant Edits")
-            } else {
-                Circle().fill(dotColor).frame(width: 8, height: 8)
-            }
+            statusMark
             statusLine
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(AgentStyle.secondary)
@@ -142,6 +210,9 @@ struct AgentPanelView: View {
                                  help: "Connectors: give the agent more tools", action: onOpenConnectors)
                 WindowIconButton(symbol: "clock.arrow.circlepath", label: "Chats", help: "All your chats",
                                  action: onOpenChats)
+            } else {
+                WindowIconButton(symbol: "minus", label: "Collapse", help: "Collapse to a small bar",
+                                 action: onCollapse)
             }
             WindowIconButton(symbol: "xmark", label: "Close",
                              help: model.status.isWorking ? "Stop and close" : "Close", action: onClose)

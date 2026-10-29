@@ -42,7 +42,7 @@ extension AppController {
         composer.onOpenConnectors = openConnectors
         panel.onOpenChats = openChats
         panel.onOpenConnectors = openConnectors
-        // ⌘ on its own while the agent's window waits in its corner: its box opens there, green.
+        // ⌘ on its own while the agent's window is up: its box opens right there, green.
         panel.onCommandTap = { [weak self] in self?.askSession.openForTyping(agentMode: true) }
         refreshConnectors()
         connectorWatch = ConnectorStore.shared.$connectors.dropFirst().sink { [weak self] _ in
@@ -101,7 +101,7 @@ extension AppController {
         guard let askKey else { return }
         let monitor = HotkeyMonitor(choice: askKey)
         let now = { ProcessInfo.processInfo.systemUptime }
-        monitor.onPressBegan = { [weak self] _ in self?.askKeyDown(at: now()) }
+        monitor.onPressBegan = { [weak self] _ in self?.askSession.keyDown(at: now()) }
         monitor.onPressEnded = { [weak self] held in self?.askSession.keyUp(held: held, at: now()) }
         // The monitor reports a second quick tap as a double-tap; to Ask it's a plain release.
         monitor.onDoubleTap = { [weak self] in self?.askSession.keyUp(held: 0, at: now()) }
@@ -111,17 +111,6 @@ extension AppController {
         monitor.startMonitoring()
         askHotkeyMonitor = monitor
         updateAskEscape()
-    }
-
-    /// The Ask key while the agent's box is open in its corner brings the box home, in
-    /// Ask's blue; otherwise it's Ask's as usual.
-    private func askKeyDown(at time: TimeInterval) {
-        if agentPanel.isTakingInput, agentPanel.isInCorner {
-            askHotkeyMonitor?.swallowCurrentPress()
-            agentPanel.moveInputHome()
-            return
-        }
-        askSession.keyDown(at: time)
     }
 
     /// Checked before the Ask window first appears: it can't see the screen without this.

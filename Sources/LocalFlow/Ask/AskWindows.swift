@@ -6,8 +6,8 @@ import AppKit
 protocol AgentInputHost: AnyObject {
     /// An agent conversation is open: its window is up, or tucked away after a question.
     var hasConversation: Bool { get }
-    /// Its window sits in its corner (where ⌘ opens the box in place).
-    var isInCorner: Bool { get }
+    /// Its window is up, wherever it sits: the box opens right there.
+    var isVisible: Bool { get }
     /// Return and Esc in the box.
     var onInputSend: (() -> Void)? { get set }
     var onInputCancel: (() -> Void)? { get set }
@@ -17,9 +17,9 @@ protocol AgentInputHost: AnyObject {
 }
 
 /// The one window Ask writes in, so Ask and the agent are never two windows at once: the
-/// Ask window, or the agent's own window while there's an agent conversation. Opened for
-/// Ask it sits at home, centered at the bottom; opened for the agent (⌘ on the agent's
-/// window) it opens where the agent's window is.
+/// Ask window, or the agent's own window while there's an agent conversation. With the
+/// agent's window up, the box opens right where it is, for Ask or the agent; tucked away,
+/// the window comes back at home, centered at the bottom, where the Ask window sits.
 @MainActor
 final class AskWindows: ComposerSurface {
     var onSend: (() -> Void)? {
@@ -50,7 +50,7 @@ final class AskWindows: ComposerSurface {
         }
         ask.hide()
         inAgentWindow = true
-        agent.showInput(model, on: screen, inPlace: model.agentMode && agent.isInCorner)
+        agent.showInput(model, on: screen, inPlace: agent.isVisible)
     }
 
     func hide() {
